@@ -57,8 +57,8 @@ async function main() {
 
   // ── Setup ──
   const s3 = new S3Store({
-    bucket: "teste-zarr",
-    prefix: "wrf_sse1_complete.zarr",
+    bucket: "my-zarr-bucket",
+    prefix: "my-data.zarr",
     region: "us-east-1",
   });
 

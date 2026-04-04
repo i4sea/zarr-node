@@ -7,8 +7,8 @@ import { S3Store, openGroup } from "../src/index.js";
 
 async function main() {
   const store = new S3Store({
-    bucket: "teste-zarr",
-    prefix: "wrf_sse1_complete.zarr",
+    bucket: "my-zarr-bucket",
+    prefix: "my-data.zarr",
     region: "us-east-1",
   });
 

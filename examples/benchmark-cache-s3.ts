@@ -16,8 +16,8 @@ function fmt(ms: number): string {
 async function main() {
   const cacheDir = join(tmpdir(), `zarr-bench-cache-${Date.now()}`);
   const s3 = new S3Store({
-    bucket: "teste-zarr",
-    prefix: "wrf_sse1_complete.zarr",
+    bucket: "my-zarr-bucket",
+    prefix: "my-data.zarr",
     region: "us-east-1",
   });
   const store = new CachedStore(s3, { cacheDir, storeId: "wrf-benchmark" });

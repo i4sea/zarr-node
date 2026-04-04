@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { rm } from "node:fs/promises";
 
-const s3 = new S3Store({ bucket: "teste-zarr", prefix: "wrf_sse1_complete.zarr", region: "us-east-1" });
+const s3 = new S3Store({ bucket: "my-zarr-bucket", prefix: "my-data.zarr", region: "us-east-1" });
 let count = 0;
 const counting = {
   async get(key: string) { count++; console.log(`  GET #${count}: ${key}`); return s3.get(key); },

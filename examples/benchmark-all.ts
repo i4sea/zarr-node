@@ -51,8 +51,8 @@ async function main() {
   const cacheDir = join(tmpdir(), `zarr-bench-${Date.now()}`);
 
   const s3 = new S3Store({
-    bucket: "teste-zarr",
-    prefix: "wrf_sse1_complete.zarr",
+    bucket: "my-zarr-bucket",
+    prefix: "my-data.zarr",
     region: "us-east-1",
   });
 
