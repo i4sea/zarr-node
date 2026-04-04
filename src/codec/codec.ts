@@ -45,4 +45,11 @@ import { GzipCodec } from "./gzip.js";
 
 codecRegistry.register("zlib", () => new GzipCodec("zlib"));
 codecRegistry.register("gzip", () => new GzipCodec("gzip"));
+
+// Auto-register Blosc — numcodecs is a direct dependency
+import { Blosc } from "numcodecs";
+
+if (!codecRegistry.has("blosc")) {
+  codecRegistry.register("blosc", (config) => Blosc.fromConfig(config));
+}
 // "raw" / null compressor is handled directly in the chunk loader, not via registry

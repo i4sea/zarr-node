@@ -6,19 +6,11 @@
  *
  * Run with: npx tsx examples/e2e-wrf.ts
  */
-import { S3Store, CachedStore, openGroup, codecRegistry } from "../src/index.js";
+import { S3Store, CachedStore, openGroup } from "../src/index.js";
 import { ZarrGroup } from "../src/group.js";
-import { Blosc } from "numcodecs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-
-codecRegistry.register("blosc", () => ({
-  id: "blosc",
-  async decode(data: Uint8Array): Promise<Uint8Array> {
-    return Blosc.fromConfig({ id: "blosc", cname: "lz4", clevel: 5, shuffle: 1, blocksize: 0 }).decode(data);
-  },
-}));
 
 function fmt(ms: number): string {
   return ms < 1000 ? `${ms.toFixed(0)}ms` : `${(ms / 1000).toFixed(2)}s`;

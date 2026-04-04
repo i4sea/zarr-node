@@ -4,18 +4,10 @@
  *
  * Run with: npx tsx examples/benchmark-cache-s3.ts
  */
-import { S3Store, CachedStore, openGroup, codecRegistry } from "../src/index.js";
-import { Blosc } from "numcodecs";
+import { S3Store, CachedStore, openGroup } from "../src/index.js";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-
-codecRegistry.register("blosc", () => ({
-  id: "blosc",
-  async decode(data: Uint8Array): Promise<Uint8Array> {
-    return Blosc.fromConfig({ id: "blosc", cname: "lz4", clevel: 5, shuffle: 1, blocksize: 0 }).decode(data);
-  },
-}));
 
 function fmt(ms: number): string {
   return ms < 1000 ? `${ms.toFixed(0)}ms` : `${(ms / 1000).toFixed(2)}s`;

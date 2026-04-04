@@ -43,6 +43,24 @@ export class HTTPStore implements Store {
     }
   }
 
+  async getRange(key: string, offset: number, length: number): Promise<Uint8Array | null> {
+    const url = `${this.baseUrl}/${key}`;
+    const end = offset + length - 1;
+    const response = await this.fetchWithRetry(url, "GET", {
+      Range: `bytes=${offset}-${end}`,
+    });
+
+    if (response.status === 404) return null;
+    if (!response.ok && response.status !== 206) {
+      throw new StoreError(
+        `HTTP GET ${url} (range) failed with status ${response.status}: ${response.statusText}`,
+      );
+    }
+
+    const buf = await response.arrayBuffer();
+    return new Uint8Array(buf);
+  }
+
   async *list(_prefix: string): AsyncIterable<string> {
     throw new UnsupportedOperationError("list()", "HTTPStore");
   }
@@ -50,14 +68,18 @@ export class HTTPStore implements Store {
   private async fetchWithRetry(
     url: string,
     method: string = "GET",
+    extraHeaders?: Record<string, string>,
   ): Promise<Response> {
     let lastError: Error | undefined;
+    const headers = extraHeaders
+      ? { ...this.headers, ...extraHeaders }
+      : this.headers;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
         const response = await fetch(url, {
           method,
-          headers: this.headers,
+          headers,
           signal: AbortSignal.timeout(this.timeout),
         });
 

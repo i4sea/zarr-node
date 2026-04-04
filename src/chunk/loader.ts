@@ -1,14 +1,19 @@
 import type { Store } from "../store/store.js";
 import type { Codec } from "../codec/codec.js";
+import type { MemoryCache } from "../cache/memory.js";
 
 export interface ChunkTask {
   key: string;
   chunkCoord: number[];
+  /** Optional byte range hint for partial chunk fetches (uncompressed only). */
+  byteRange?: { offset: number; length: number };
 }
 
 export interface LoadedChunk {
   chunkCoord: number[];
   data: Uint8Array;
+  /** True when data contains only the byte-range slice, not the full chunk. */
+  partial?: boolean;
 }
 
 /**
@@ -22,11 +27,37 @@ export async function loadChunks(
   fillValue: number | null,
   chunkByteSize: number,
   concurrency: number,
+  memoryCache?: MemoryCache | null,
 ): Promise<LoadedChunk[]> {
   const results: LoadedChunk[] = [];
   let index = 0;
 
+  // Can we use byte-range requests? Only when uncompressed and store supports it.
+  const useByteRange = codec === null && typeof store.getRange === "function";
+
   async function processTask(task: ChunkTask): Promise<LoadedChunk> {
+    // Check memory cache first
+    if (memoryCache) {
+      const cached = memoryCache.get(task.key);
+      if (cached !== null) {
+        return { chunkCoord: task.chunkCoord, data: cached };
+      }
+    }
+
+    // Use byte-range fetch for uncompressed partial reads
+    if (useByteRange && task.byteRange) {
+      const partial = await store.getRange!(
+        task.key,
+        task.byteRange.offset,
+        task.byteRange.length,
+      );
+      if (partial !== null) {
+        // Don't cache partial reads — cache expects full decoded chunks
+        return { chunkCoord: task.chunkCoord, data: partial, partial: true };
+      }
+      // Fall through to full fetch if range failed
+    }
+
     const raw = await store.get(task.key);
 
     if (raw === null) {
@@ -36,6 +67,12 @@ export async function loadChunks(
     }
 
     const decoded = codec ? await codec.decode(raw) : raw;
+
+    // Store decoded result in memory cache
+    if (memoryCache) {
+      memoryCache.set(task.key, decoded);
+    }
+
     return { chunkCoord: task.chunkCoord, data: decoded };
   }
 

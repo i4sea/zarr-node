@@ -1,16 +1,8 @@
-import { S3Store, openGroup, codecRegistry } from "../src/index.js";
+import { S3Store, openGroup } from "../src/index.js";
 import { CachedStore } from "../src/cache/cached-store.js";
-import { Blosc } from "numcodecs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-
-codecRegistry.register("blosc", () => ({
-  id: "blosc",
-  async decode(data: Uint8Array): Promise<Uint8Array> {
-    return Blosc.fromConfig({ id: "blosc", cname: "lz4", clevel: 5, shuffle: 1, blocksize: 0 }).decode(data);
-  },
-}));
 
 function fmt(ms: number): string {
   return ms < 1000 ? `${ms.toFixed(0)}ms` : `${(ms / 1000).toFixed(2)}s`;

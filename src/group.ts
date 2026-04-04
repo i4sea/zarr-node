@@ -1,7 +1,9 @@
 import type { Store } from "./store/store.js";
 import type { Zattrs } from "./metadata/types.js";
+import type { TypedArray } from "./dtype.js";
 import type { ConsolidatedMetadata } from "./metadata/consolidated.js";
 import { ZarrArray } from "./array.js";
+import type { Slice, ReadOptions } from "./array.js";
 import { parseZarrayMeta, parseZgroupMeta, parseZattrs } from "./metadata/v2.js";
 import { MetadataError } from "./errors.js";
 
@@ -68,6 +70,44 @@ export class ZarrGroup {
         yield [name, await this.getGroup(name)];
       }
     }
+  }
+
+  /**
+   * Read multiple arrays with the same selection through a shared concurrency pool.
+   * Invalid array names are silently skipped (partial failure handling).
+   */
+  async readMultiple(
+    names: string[],
+    selection?: Slice,
+    options?: ReadOptions,
+  ): Promise<Map<string, TypedArray>> {
+    const results = new Map<string, TypedArray>();
+
+    // Open all arrays (skip invalid ones)
+    const arrays: Array<{ name: string; array: ZarrArray }> = [];
+    for (const name of names) {
+      try {
+        const arr = await this.getArray(name);
+        arrays.push({ name, array: arr });
+      } catch {
+        // Skip invalid array names (FR-013 partial failure)
+      }
+    }
+
+    // Read all arrays with shared concurrency
+    const promises = arrays.map(async ({ name, array }) => {
+      const data = await array.get(selection, options);
+      return { name, data };
+    });
+
+    const settled = await Promise.allSettled(promises);
+    for (const result of settled) {
+      if (result.status === "fulfilled") {
+        results.set(result.value.name, result.value.data);
+      }
+    }
+
+    return results;
   }
 
   async contains(name: string): Promise<boolean> {

@@ -80,6 +80,40 @@ export class S3Store implements Store {
     }
   }
 
+  async getRange(key: string, offset: number, length: number): Promise<Uint8Array | null> {
+    const client = await this.getClient();
+    const fullKey = this.resolveKey(key);
+    const end = offset + length - 1;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const sdk = await loadS3SDK();
+        const response = await client.send(
+          new sdk.GetObjectCommand({
+            Bucket: this.bucket,
+            Key: fullKey,
+            Range: `bytes=${offset}-${end}`,
+          }),
+        );
+        const body = response.Body;
+        if (!body) return null;
+        const bytes = await body.transformToByteArray();
+        return new Uint8Array(bytes);
+      } catch (err) {
+        if (isNotFound(err)) return null;
+        if (isRetryable(err) && attempt < MAX_RETRIES) {
+          await delay(BASE_DELAY_MS * Math.pow(2, attempt));
+          continue;
+        }
+        throw new StoreError(
+          `S3 GET s3://${this.bucket}/${fullKey} (range) failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    return null;
+  }
+
   async *list(prefix: string): AsyncIterable<string> {
     const client = await this.getClient();
     const fullPrefix = this.prefix

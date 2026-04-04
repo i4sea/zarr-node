@@ -3,23 +3,7 @@
  *
  * Run with: npx tsx examples/benchmark-wrf.ts
  */
-import { S3Store, openGroup, codecRegistry } from "../src/index.js";
-import { Blosc } from "numcodecs";
-
-// Register Blosc codec
-codecRegistry.register("blosc", () => ({
-  id: "blosc",
-  async decode(data: Uint8Array): Promise<Uint8Array> {
-    const codec = Blosc.fromConfig({
-      id: "blosc",
-      cname: "lz4",
-      clevel: 5,
-      shuffle: 1,
-      blocksize: 0,
-    });
-    return codec.decode(data);
-  },
-}));
+import { S3Store, openGroup } from "../src/index.js";
 
 function fmt(ms: number): string {
   return ms < 1000 ? `${ms.toFixed(0)}ms` : `${(ms / 1000).toFixed(2)}s`;

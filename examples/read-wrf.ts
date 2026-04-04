@@ -3,23 +3,7 @@
  *
  * Run with: npx tsx examples/read-wrf.ts
  */
-import { S3Store, openGroup, openArray, codecRegistry } from "../src/index.js";
-import { Blosc } from "numcodecs";
-
-// Register Blosc codec
-codecRegistry.register("blosc", () => ({
-  id: "blosc",
-  async decode(data: Uint8Array): Promise<Uint8Array> {
-    const codec = Blosc.fromConfig({
-      id: "blosc",
-      cname: "lz4",
-      clevel: 5,
-      shuffle: 1,
-      blocksize: 0,
-    });
-    return codec.decode(data);
-  },
-}));
+import { S3Store, openGroup, openArray } from "../src/index.js";
 
 async function main() {
   const store = new S3Store({

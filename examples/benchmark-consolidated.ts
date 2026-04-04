@@ -3,15 +3,7 @@
  *
  * Run with: npx tsx examples/benchmark-consolidated.ts
  */
-import { S3Store, openGroup, codecRegistry } from "../src/index.js";
-import { Blosc } from "numcodecs";
-
-codecRegistry.register("blosc", () => ({
-  id: "blosc",
-  async decode(data: Uint8Array): Promise<Uint8Array> {
-    return Blosc.fromConfig({ id: "blosc", cname: "lz4", clevel: 5, shuffle: 1, blocksize: 0 }).decode(data);
-  },
-}));
+import { S3Store, openGroup } from "../src/index.js";
 
 async function main() {
   const store = new S3Store({

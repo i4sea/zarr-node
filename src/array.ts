@@ -2,6 +2,7 @@ import type { Store } from "./store/store.js";
 import type { ZarrayMeta, Zattrs } from "./metadata/types.js";
 import type { Codec } from "./codec/codec.js";
 import type { TypedArray } from "./dtype.js";
+import type { MemoryCache } from "./cache/memory.js";
 import {
   dtypeToTypedArrayCtor,
   dtypeByteSize,
@@ -22,8 +23,13 @@ import type { DimRange } from "./chunk/indexing.js";
 import { loadChunks } from "./chunk/loader.js";
 import type { ChunkTask } from "./chunk/loader.js";
 
+/** Default concurrency for chunk loading. */
+export const DEFAULT_CONCURRENCY = 50;
+
 export interface ReadOptions {
+  /** Max parallel chunk fetches. Default: 50. */
   concurrency?: number;
+  memoryCache?: MemoryCache;
 }
 
 export type Slice = (number | [number, number] | null)[];
@@ -81,16 +87,17 @@ export class ZarrArray {
     selection?: Slice,
     options?: ReadOptions,
   ): Promise<TypedArray> {
-    const concurrency = options?.concurrency ?? 10;
+    const concurrency = options?.concurrency ?? DEFAULT_CONCURRENCY;
+    const memoryCache = options?.memoryCache ?? null;
 
     if (selection !== undefined) {
-      return this.getSlice(selection, concurrency);
+      return this.getSlice(selection, concurrency, memoryCache);
     }
 
-    return this.getFull(concurrency);
+    return this.getFull(concurrency, memoryCache);
   }
 
-  private async getFull(concurrency: number): Promise<TypedArray> {
+  private async getFull(concurrency: number, memoryCache: MemoryCache | null): Promise<TypedArray> {
     const ndim = this.shape.length;
     const ranges = computeChunkRanges(this.shape, this.chunks);
     const byteSize = dtypeByteSize(this.dtype);
@@ -114,6 +121,7 @@ export class ZarrArray {
       this.fillValue,
       chunkByteSize,
       concurrency,
+      memoryCache,
     );
 
     // Assemble into output
@@ -206,6 +214,7 @@ export class ZarrArray {
   private async getSlice(
     selection: Slice,
     concurrency: number,
+    memoryCache: MemoryCache | null,
   ): Promise<TypedArray> {
     const ndim = this.shape.length;
     const ranges = normalizeSelection(selection, this.shape);
@@ -217,12 +226,25 @@ export class ZarrArray {
     const chunkRanges = computeSliceChunkRanges(ranges, this.chunks);
 
     // Build chunk tasks (only needed chunks)
+    // For uncompressed C-order arrays, try to compute byte ranges for partial reads
+    const canByteRange =
+      this.codec === null && this.order === "C" && typeof this.store.getRange === "function";
+
     const tasks: ChunkTask[] = [];
     for (const coord of allChunkCoords(chunkRanges)) {
       const key = this.basePath
         ? `${this.basePath}/${chunkKey(coord, this.meta.dimension_separator)}`
         : chunkKey(coord, this.meta.dimension_separator);
-      tasks.push({ key, chunkCoord: coord });
+      const task: ChunkTask = { key, chunkCoord: coord };
+
+      if (canByteRange) {
+        const br = this.computeChunkByteRange(coord, ranges, byteSize);
+        if (br) {
+          task.byteRange = br;
+        }
+      }
+
+      tasks.push(task);
     }
 
     const loaded = await loadChunks(
@@ -232,6 +254,7 @@ export class ZarrArray {
       this.fillValue,
       chunkByteSize,
       concurrency,
+      memoryCache,
     );
 
     // Compute output shape
@@ -259,24 +282,139 @@ export class ZarrArray {
         chunkBuf.byteLength / byteSize,
       );
 
-      const chunkDataStrides =
-        this.order === "F"
-          ? fStrides(this.chunks as number[])
-          : cStrides(this.chunks as number[]);
+      if (chunk.partial) {
+        // Partial byte-range read: data is already the contiguous overlap elements.
+        // Copy directly into the correct output position.
+        this.copyPartialToOutput(
+          chunkTyped,
+          output,
+          chunk.chunkCoord,
+          ranges,
+          outputStrides,
+          ndim,
+        );
+      } else {
+        const chunkDataStrides =
+          this.order === "F"
+            ? fStrides(this.chunks as number[])
+            : cStrides(this.chunks as number[]);
 
-      // Copy relevant elements from this chunk to output
-      this.copySliceChunkToOutput(
-        chunkTyped,
-        output,
-        chunk.chunkCoord,
-        ranges,
-        chunkDataStrides,
-        outputStrides,
-        ndim,
-      );
+        // Copy relevant elements from this chunk to output
+        this.copySliceChunkToOutput(
+          chunkTyped,
+          output,
+          chunk.chunkCoord,
+          ranges,
+          chunkDataStrides,
+          outputStrides,
+          ndim,
+        );
+      }
     }
 
     return output;
+  }
+
+  /**
+   * Copy contiguous partial (byte-range) data into the output array.
+   * The partial data is ordered in C-order and corresponds to the overlap
+   * between the chunk and the slice, with full trailing dimensions.
+   */
+  private copyPartialToOutput(
+    partialData: TypedArray,
+    output: TypedArray,
+    chunkCoord: number[],
+    ranges: DimRange[],
+    outputStrides: number[],
+    ndim: number,
+  ): void {
+    const chunkStart = chunkCoord.map((c, d) => c * this.chunks[d]);
+    const chunkEnd = chunkCoord.map((c, d) =>
+      Math.min((c + 1) * this.chunks[d], this.shape[d]),
+    );
+    const overlapStart = ranges.map((r, d) => Math.max(r.start, chunkStart[d]));
+    const overlapEnd = ranges.map((r, d) => Math.min(r.stop, chunkEnd[d]));
+    const overlapShape = overlapEnd.map((e, d) => e - overlapStart[d]);
+
+    // Partial data is contiguous in C-order with shape = overlapShape
+    const partialStrides = cStrides(overlapShape);
+
+    const copyRecursive = (
+      dim: number,
+      partialLinear: number,
+      outputLinear: number,
+    ): void => {
+      if (dim === ndim) {
+        (output as unknown as number[])[outputLinear] =
+          (partialData as unknown as number[])[partialLinear];
+        return;
+      }
+      for (let i = 0; i < overlapShape[dim]; i++) {
+        const outputIdx = (overlapStart[dim] - ranges[dim].start) + i;
+        copyRecursive(
+          dim + 1,
+          partialLinear + i * partialStrides[dim],
+          outputLinear + outputIdx * outputStrides[dim],
+        );
+      }
+    };
+
+    copyRecursive(0, 0, 0);
+  }
+
+  /**
+   * For uncompressed C-order arrays, compute the contiguous byte range within a chunk
+   * that covers the slice overlap. Returns null if bytes are not contiguous.
+   *
+   * Bytes are contiguous when the overlap covers the full chunk width on all
+   * trailing dimensions (all dims except the outermost that is partially sliced).
+   */
+  private computeChunkByteRange(
+    chunkCoord: number[],
+    ranges: DimRange[],
+    byteSize: number,
+  ): { offset: number; length: number } | null {
+    const ndim = this.shape.length;
+    const chunkStart = chunkCoord.map((c, d) => c * this.chunks[d]);
+    const chunkEnd = chunkCoord.map((c, d) =>
+      Math.min((c + 1) * this.chunks[d], this.shape[d]),
+    );
+
+    // Compute overlap per dimension
+    const overlapStart = ranges.map((r, d) => Math.max(r.start, chunkStart[d]));
+    const overlapEnd = ranges.map((r, d) => Math.min(r.stop, chunkEnd[d]));
+
+    // Check contiguity: trailing dimensions must cover full chunk width
+    // Find the first dimension where the overlap is partial
+    for (let d = ndim - 1; d >= 1; d--) {
+      const chunkDimSize = chunkEnd[d] - chunkStart[d];
+      const overlapSize = overlapEnd[d] - overlapStart[d];
+      if (overlapSize !== chunkDimSize) {
+        // Not contiguous — can't use byte range
+        return null;
+      }
+    }
+
+    // All trailing dims are full chunk width → contiguous
+    // Compute C-order strides for the actual chunk shape
+    const actualChunkShape = chunkEnd.map((e, d) => e - chunkStart[d]);
+    const strides = cStrides(actualChunkShape);
+
+    // First element offset within chunk
+    const firstLocal = overlapStart.map((s, d) => s - chunkStart[d]);
+    let startElement = 0;
+    for (let d = 0; d < ndim; d++) {
+      startElement += firstLocal[d] * strides[d];
+    }
+
+    // Total contiguous elements
+    const overlapShape = overlapEnd.map((e, d) => e - overlapStart[d]);
+    const numElements = overlapShape.reduce((a, b) => a * b, 1);
+
+    return {
+      offset: startElement * byteSize,
+      length: numElements * byteSize,
+    };
   }
 
   private copySliceChunkToOutput(

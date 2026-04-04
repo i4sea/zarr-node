@@ -12,6 +12,8 @@ export interface CacheOptions {
   storeId?: string;
   /** Skip caching (e.g., for local filesystem stores). Default: false. */
   skipLocal?: boolean;
+  /** Maximum total cache size in bytes. Oldest entries evicted when exceeded. */
+  maxSizeBytes?: number;
 }
 
 export class CachedStore implements Store {
@@ -26,7 +28,8 @@ export class CachedStore implements Store {
 
     const storeId = options.storeId ?? deriveStoreId(inner);
     const ttlMs = options.ttl ? options.ttl * 1000 : null;
-    this.cache = new DiskCache(options.cacheDir, storeId, ttlMs);
+    const maxSizeBytes = options.maxSizeBytes ?? null;
+    this.cache = new DiskCache(options.cacheDir, storeId, ttlMs, maxSizeBytes);
   }
 
   async get(key: string): Promise<Uint8Array | null> {
@@ -71,6 +74,17 @@ export class CachedStore implements Store {
 
   async has(key: string): Promise<boolean> {
     return this.inner.has(key);
+  }
+
+  async getRange(key: string, offset: number, length: number): Promise<Uint8Array | null> {
+    // Delegate to inner store — no caching for partial reads
+    if (this.inner.getRange) {
+      return this.inner.getRange(key, offset, length);
+    }
+    // Fallback: full fetch + slice
+    const data = await this.get(key);
+    if (data === null) return null;
+    return data.slice(offset, offset + length);
   }
 
   async *list(prefix: string): AsyncIterable<string> {
