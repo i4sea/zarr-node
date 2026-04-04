@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+*.log
+.env*
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+.vscode/
+.idea/
+.venv/
+tests/fixtures/large_100mb/
+tests/fixtures/large_1gb/

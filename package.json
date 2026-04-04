@@ -1,0 +1,53 @@
+{
+  "name": "zarr-node",
+  "version": "0.1.0",
+  "description": "Read-only Zarr v2 array reader for Node.js",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src/ tests/",
+    "format": "prettier --write 'src/**/*.ts' 'tests/**/*.ts'",
+    "format:check": "prettier --check 'src/**/*.ts' 'tests/**/*.ts'",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@aws-sdk/client-s3": "^3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@aws-sdk/client-s3": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@aws-sdk/client-s3": "^3.1024.0",
+    "@types/node": "^25.5.2",
+    "@vitest/coverage-v8": "^3.1.1",
+    "eslint": "^9.25.0",
+    "prettier": "^3.5.3",
+    "tsx": "^4.21.0",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.30.1",
+    "vitest": "^3.1.1"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "numcodecs": "^0.3.2"
+  }
+}

@@ -1,0 +1,1 @@
+{"root_attrs": {"description": "Test nested groups"}, "level1_attrs": {"depth": 1}, "level2_attrs": {"depth": 2}, "array_a": {"shape": [3], "dtype": "<f4", "data": [1.0, 2.0, 3.0]}, "array_b": {"shape": [4], "dtype": "<i4", "data": [10, 20, 30, 40]}}
