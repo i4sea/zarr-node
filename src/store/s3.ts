@@ -8,7 +8,6 @@ const BASE_DELAY_MS = 100;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function loadS3SDK(): Promise<any> {
   try {
-    // @ts-expect-error — optional peer dependency, may not be installed
     return await import("@aws-sdk/client-s3");
   } catch {
     throw new StoreError(

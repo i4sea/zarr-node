@@ -2,6 +2,8 @@ import type { Store } from "./store/store.js";
 import { ZarrArray } from "./array.js";
 import { ZarrGroup } from "./group.js";
 import type { Zattrs } from "./metadata/types.js";
+import type { ConsolidatedMetadata } from "./metadata/consolidated.js";
+import { parseConsolidatedMetadata } from "./metadata/consolidated.js";
 import { parseZarrayMeta, parseZgroupMeta, parseZattrs } from "./metadata/v2.js";
 import { MetadataError } from "./errors.js";
 
@@ -123,13 +125,42 @@ async function openGroupFromMeta(
 ): Promise<ZarrGroup> {
   parseZgroupMeta(new TextDecoder().decode(zgroupRaw));
 
-  const zattrsKey = basePath ? `${basePath}/.zattrs` : ".zattrs";
-  const zattrsRaw = await store.get(zattrsKey);
-  const attrs: Zattrs = zattrsRaw
-    ? parseZattrs(new TextDecoder().decode(zattrsRaw))
-    : {};
+  // Load consolidated metadata if available (FR-001, FR-007)
+  const consolidated = await loadConsolidatedMetadata(store, basePath);
 
-  return new ZarrGroup(store, attrs, basePath);
+  // Load attrs — use consolidated cache if available
+  let attrs: Zattrs = {};
+  const zattrsKey = basePath ? `${basePath}/.zattrs` : ".zattrs";
+  if (consolidated) {
+    const cached = consolidated.get(zattrsKey);
+    if (cached) {
+      attrs = parseZattrs(new TextDecoder().decode(cached));
+    }
+  } else {
+    const zattrsRaw = await store.get(zattrsKey);
+    attrs = zattrsRaw
+      ? parseZattrs(new TextDecoder().decode(zattrsRaw))
+      : {};
+  }
+
+  return new ZarrGroup(store, attrs, basePath, consolidated);
+}
+
+/**
+ * Attempt to load .zmetadata from the store root.
+ * Returns null if not found (transparent fallback per FR-004).
+ */
+async function loadConsolidatedMetadata(
+  store: Store,
+  basePath: string,
+): Promise<ConsolidatedMetadata | null> {
+  // .zmetadata is always at store root, not at sub-group paths
+  if (basePath) return null;
+
+  const raw = await store.get(".zmetadata");
+  if (!raw) return null;
+  // Malformed .zmetadata will throw MetadataError from parseConsolidatedMetadata
+  return parseConsolidatedMetadata(raw);
 }
 
 function normalizePath(path: string): string {
