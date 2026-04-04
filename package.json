@@ -47,6 +47,28 @@
     "vitest": "^3.1.1"
   },
   "license": "MIT",
+  "author": "Andre Brandao <andre@i4sea.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/i4sea/zarr-node.git"
+  },
+  "homepage": "https://github.com/i4sea/zarr-node#readme",
+  "bugs": {
+    "url": "https://github.com/i4sea/zarr-node/issues"
+  },
+  "keywords": [
+    "zarr",
+    "zarr-v2",
+    "netcdf",
+    "hdf5",
+    "scientific-data",
+    "geospatial",
+    "ndarray",
+    "chunked-arrays",
+    "s3",
+    "kerchunk"
+  ],
+  "sideEffects": false,
   "dependencies": {
     "numcodecs": "^0.3.2"
   }
