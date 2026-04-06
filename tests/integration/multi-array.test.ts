@@ -9,7 +9,7 @@ const FIXTURES = join(import.meta.dirname, "..", "fixtures");
 describe("readMultiple", () => {
   // T016: Read 4 arrays via readMultiple(), verify all returned correctly
   it("reads multiple arrays with the same selection", async () => {
-    const store = new FileSystemStore({ path: join(FIXTURES, "dataset_wrf") });
+    const store = new FileSystemStore({ path: join(FIXTURES, "multi_array") });
     const root = await openGroup(store);
 
     const results = await root.readMultiple(
@@ -29,7 +29,7 @@ describe("readMultiple", () => {
   });
 
   it("reads all arrays without selection (full read)", async () => {
-    const store = new FileSystemStore({ path: join(FIXTURES, "dataset_wrf") });
+    const store = new FileSystemStore({ path: join(FIXTURES, "multi_array") });
     const root = await openGroup(store);
 
     const results = await root.readMultiple(["time", "lat", "lon"]);
@@ -44,7 +44,7 @@ describe("readMultiple", () => {
     let maxConcurrent = 0;
     let currentConcurrent = 0;
 
-    const inner = new FileSystemStore({ path: join(FIXTURES, "dataset_wrf") });
+    const inner = new FileSystemStore({ path: join(FIXTURES, "multi_array") });
     // Wrap store to track concurrent fetches
     const trackingStore: Store = {
       async get(key: string) {
@@ -73,7 +73,7 @@ describe("readMultiple", () => {
 
   // T017b: Partial failure — one invalid array name
   it("returns error for invalid array and results for valid arrays", async () => {
-    const store = new FileSystemStore({ path: join(FIXTURES, "dataset_wrf") });
+    const store = new FileSystemStore({ path: join(FIXTURES, "multi_array") });
     const root = await openGroup(store);
 
     const results = await root.readMultiple(

@@ -16,7 +16,6 @@ Read-only Zarr v2 array reader for Node.js. Server-first, with FileSystem, HTTP,
 - **Byte-range requests** for partial chunk fetches on uncompressed data
 - **Multi-array reads** with shared concurrency pool
 - **Reference filesystem** (kerchunk) for reading HDF5/NetCDF without conversion
-- **Dataset** with xarray-style label-based coordinate selection
 
 ## Install
 
@@ -92,18 +91,6 @@ const results = await group.readMultiple(
 );
 ```
 
-### Dataset with coordinate selection
-
-```typescript
-import { FileSystemStore, openDataset } from "zarr-node";
-
-const store = new FileSystemStore("/path/to/wrf-output");
-const ds = await openDataset(store);
-
-// Select by coordinate values (nearest-neighbor lookup)
-const result = await ds.sel({ lat: -25.5, lon: -48.5, time: 0 });
-```
-
 ### Caching
 
 ```typescript
@@ -148,7 +135,6 @@ const data = await array.read();
 | `open(store, path?)` | Open a Zarr array or group |
 | `openArray(store, path?)` | Open a Zarr array (throws if not an array) |
 | `openGroup(store, path?)` | Open a Zarr group (throws if not a group) |
-| `openDataset(store, path?)` | Open a group as a Dataset with coordinate selection |
 
 ### Store backends
 
@@ -173,7 +159,6 @@ const data = await array.read();
 | --- | --- |
 | `ZarrArray` | Read chunked array data with slicing support |
 | `ZarrGroup` | Traverse groups, list arrays, multi-array reads |
-| `Dataset` | Dimension-aware access with `sel()` coordinate selection |
 
 ## Contributing
 

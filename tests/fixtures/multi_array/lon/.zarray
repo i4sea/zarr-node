@@ -5,7 +5,7 @@
   "chunks": [
     3
   ],
-  "dtype": "<f8",
+  "dtype": "<f4",
   "fill_value": 0.0,
   "order": "C",
   "filters": null,
