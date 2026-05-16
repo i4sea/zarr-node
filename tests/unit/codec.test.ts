@@ -57,8 +57,12 @@ describe("codecRegistry", () => {
   });
 
   it("throws for unregistered codec with descriptive message", () => {
-    expect(() => codecRegistry.get({ id: "unknown-codec-xyz" })).toThrow("unknown-codec-xyz");
-    expect(() => codecRegistry.get({ id: "unknown-codec-xyz" })).toThrow("register");
+    expect(() => codecRegistry.get({ id: "unknown-codec-xyz" })).toThrow(
+      "unknown-codec-xyz",
+    );
+    expect(() => codecRegistry.get({ id: "unknown-codec-xyz" })).toThrow(
+      "register",
+    );
   });
 
   it("allows registering and using a custom codec", () => {

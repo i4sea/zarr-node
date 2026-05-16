@@ -43,7 +43,11 @@ export class HTTPStore implements Store {
     }
   }
 
-  async getRange(key: string, offset: number, length: number): Promise<Uint8Array | null> {
+  async getRange(
+    key: string,
+    offset: number,
+    length: number,
+  ): Promise<Uint8Array | null> {
     const url = `${this.baseUrl}/${key}`;
     const end = offset + length - 1;
     const response = await this.fetchWithRetry(url, "GET", {

@@ -4,7 +4,11 @@ import type { TypedArray } from "./dtype.js";
 import type { ConsolidatedMetadata } from "./metadata/consolidated.js";
 import { ZarrArray } from "./array.js";
 import type { Slice, ReadOptions } from "./array.js";
-import { parseZarrayMeta, parseZgroupMeta, parseZattrs } from "./metadata/v2.js";
+import {
+  parseZarrayMeta,
+  parseZgroupMeta,
+  parseZattrs,
+} from "./metadata/v2.js";
 import { MetadataError } from "./errors.js";
 
 export class ZarrGroup {

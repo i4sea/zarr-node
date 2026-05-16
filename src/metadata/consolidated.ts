@@ -50,16 +50,12 @@ export function parseConsolidatedMetadata(
       unknown
     >;
   } catch {
-    throw new MetadataError(
-      "Invalid .zmetadata: failed to parse JSON",
-    );
+    throw new MetadataError("Invalid .zmetadata: failed to parse JSON");
   }
 
   const metadata = parsed.metadata;
   if (!metadata || typeof metadata !== "object") {
-    throw new MetadataError(
-      'Invalid .zmetadata: missing "metadata" key',
-    );
+    throw new MetadataError('Invalid .zmetadata: missing "metadata" key');
   }
 
   const encoder = new TextEncoder();

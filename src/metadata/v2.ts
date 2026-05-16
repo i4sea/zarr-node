@@ -36,9 +36,7 @@ export function parseZarrayMeta(raw: string): ZarrayMeta {
 
   const order = parsed.order as string;
   if (order !== "C" && order !== "F") {
-    throw new MetadataError(
-      `Invalid order: "${order}". Must be "C" or "F".`,
-    );
+    throw new MetadataError(`Invalid order: "${order}". Must be "C" or "F".`);
   }
 
   const dtype = parsed.dtype as string;

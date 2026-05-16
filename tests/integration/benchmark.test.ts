@@ -19,7 +19,9 @@ describe("T049 — Performance: 100MB array read < 2 seconds", () => {
   it("reads 100MB chunked array from filesystem in < 2 seconds", async () => {
     const exists = await fixtureExists("large_100mb");
     if (!exists) {
-      console.log("Skipping: large_100mb fixture not found. Run: .venv/bin/python tests/fixtures/generate_large.py");
+      console.log(
+        "Skipping: large_100mb fixture not found. Run: .venv/bin/python tests/fixtures/generate_large.py",
+      );
       return;
     }
 
@@ -45,7 +47,9 @@ describe("T050 — Memory: slice read of 1GB array < 100MB overhead", () => {
   it("reads a small slice of 1GB array without excessive memory usage", async () => {
     const exists = await fixtureExists("large_1gb");
     if (!exists) {
-      console.log("Skipping: large_1gb fixture not found. Run: .venv/bin/python tests/fixtures/generate_large.py");
+      console.log(
+        "Skipping: large_1gb fixture not found. Run: .venv/bin/python tests/fixtures/generate_large.py",
+      );
       return;
     }
 
@@ -62,7 +66,10 @@ describe("T050 — Memory: slice read of 1GB array < 100MB overhead", () => {
     // Read a small slice: [0:100, 0:100] = 10,000 elements * 8 bytes = 80KB
     // This should only fetch the chunks needed (chunk size 1024x1024),
     // so at most 1 chunk = ~8MB, well under 100MB overhead
-    const slice = await arr.get([[0, 100], [0, 100]]);
+    const slice = await arr.get([
+      [0, 100],
+      [0, 100],
+    ]);
 
     const memAfter = process.memoryUsage().heapUsed;
     const overheadMB = (memAfter - memBefore) / (1024 * 1024);

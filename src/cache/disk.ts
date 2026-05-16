@@ -1,4 +1,12 @@
-import { readFile, writeFile, rename, mkdir, rm, stat, readdir } from "node:fs/promises";
+import {
+  readFile,
+  writeFile,
+  rename,
+  mkdir,
+  rm,
+  stat,
+  readdir,
+} from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 
@@ -7,11 +15,19 @@ export class DiskCache {
   private readonly ttlMs: number | null;
   private readonly maxSizeBytes: number | null;
 
-  constructor(cacheDir: string, storeId: string, ttlMs: number | null, maxSizeBytes: number | null = null) {
+  constructor(
+    cacheDir: string,
+    storeId: string,
+    ttlMs: number | null,
+    maxSizeBytes: number | null = null,
+  ) {
     if (maxSizeBytes !== null && maxSizeBytes <= 0) {
       throw new Error("DiskCache maxSizeBytes must be > 0");
     }
-    const hash = createHash("sha256").update(storeId).digest("hex").slice(0, 16);
+    const hash = createHash("sha256")
+      .update(storeId)
+      .digest("hex")
+      .slice(0, 16);
     this.storeDir = join(cacheDir, hash);
     this.ttlMs = ttlMs;
     this.maxSizeBytes = maxSizeBytes;
@@ -96,7 +112,9 @@ export class DiskCache {
   }
 
   /** Recursively scan directory for files with their size and mtime. */
-  private async scanDirectory(dir: string): Promise<Array<{ path: string; size: number; mtimeMs: number }>> {
+  private async scanDirectory(
+    dir: string,
+  ): Promise<Array<{ path: string; size: number; mtimeMs: number }>> {
     const results: Array<{ path: string; size: number; mtimeMs: number }> = [];
 
     try {

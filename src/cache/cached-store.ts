@@ -76,7 +76,11 @@ export class CachedStore implements Store {
     return this.inner.has(key);
   }
 
-  async getRange(key: string, offset: number, length: number): Promise<Uint8Array | null> {
+  async getRange(
+    key: string,
+    offset: number,
+    length: number,
+  ): Promise<Uint8Array | null> {
     // Delegate to inner store — no caching for partial reads
     if (this.inner.getRange) {
       return this.inner.getRange(key, offset, length);

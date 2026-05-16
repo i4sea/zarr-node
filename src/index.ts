@@ -4,7 +4,11 @@ import { ZarrGroup } from "./group.js";
 import type { Zattrs } from "./metadata/types.js";
 import type { ConsolidatedMetadata } from "./metadata/consolidated.js";
 import { parseConsolidatedMetadata } from "./metadata/consolidated.js";
-import { parseZarrayMeta, parseZgroupMeta, parseZattrs } from "./metadata/v2.js";
+import {
+  parseZarrayMeta,
+  parseZgroupMeta,
+  parseZattrs,
+} from "./metadata/v2.js";
 import { MetadataError } from "./errors.js";
 // Re-export public API
 export { ZarrArray } from "./array.js";
@@ -12,7 +16,12 @@ export { ZarrGroup } from "./group.js";
 export type { ReadOptions, Slice } from "./array.js";
 export { DEFAULT_CONCURRENCY } from "./array.js";
 export type { TypedArray, TypedArrayConstructor } from "./dtype.js";
-export type { Store, FileSystemStoreOptions, HTTPStoreOptions, S3StoreOptions } from "./store/store.js";
+export type {
+  Store,
+  FileSystemStoreOptions,
+  HTTPStoreOptions,
+  S3StoreOptions,
+} from "./store/store.js";
 export { FileSystemStore } from "./store/filesystem.js";
 export { HTTPStore } from "./store/http.js";
 export { S3Store } from "./store/s3.js";
@@ -25,7 +34,13 @@ export type { ReferenceStoreOptions } from "./store/reference.js";
 export type { ReferenceSpec } from "./metadata/reference-spec.js";
 export type { Codec, CodecFactory, CodecRegistry } from "./codec/codec.js";
 export { codecRegistry } from "./codec/codec.js";
-export type { CompressorConfig, FilterConfig, ZarrayMeta, ZgroupMeta, Zattrs } from "./metadata/types.js";
+export type {
+  CompressorConfig,
+  FilterConfig,
+  ZarrayMeta,
+  ZgroupMeta,
+  Zattrs,
+} from "./metadata/types.js";
 export {
   ZarrError,
   MetadataError,
@@ -111,9 +126,7 @@ async function openArrayFromMeta(
   basePath: string,
   zarrayRaw: Uint8Array,
 ): Promise<ZarrArray> {
-  const meta = parseZarrayMeta(
-    new TextDecoder().decode(zarrayRaw),
-  );
+  const meta = parseZarrayMeta(new TextDecoder().decode(zarrayRaw));
 
   // Load .zattrs if present
   const zattrsKey = basePath ? `${basePath}/.zattrs` : ".zattrs";
@@ -145,9 +158,7 @@ async function openGroupFromMeta(
     }
   } else {
     const zattrsRaw = await store.get(zattrsKey);
-    attrs = zattrsRaw
-      ? parseZattrs(new TextDecoder().decode(zattrsRaw))
-      : {};
+    attrs = zattrsRaw ? parseZattrs(new TextDecoder().decode(zattrsRaw)) : {};
   }
 
   return new ZarrGroup(store, attrs, basePath, consolidated);
@@ -173,4 +184,3 @@ async function loadConsolidatedMetadata(
 function normalizePath(path: string): string {
   return path.replace(/^\/+|\/+$/g, "");
 }
-

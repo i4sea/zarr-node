@@ -47,9 +47,15 @@ describe("Byte-range requests", () => {
 
   // T021: Read small slice from uncompressed fixture, verify only needed bytes fetched
   it("tracks byte ranges requested from store", async () => {
-    const inner = new FileSystemStore({ path: join(FIXTURES, "uncompressed_2d") });
+    const inner = new FileSystemStore({
+      path: join(FIXTURES, "uncompressed_2d"),
+    });
 
-    const rangesRequested: Array<{ key: string; offset: number; length: number }> = [];
+    const rangesRequested: Array<{
+      key: string;
+      offset: number;
+      length: number;
+    }> = [];
     const fullGets: string[] = [];
 
     // Create a tracking wrapper
@@ -58,8 +64,12 @@ describe("Byte-range requests", () => {
         fullGets.push(key);
         return inner.get(key);
       },
-      async has(key: string) { return inner.has(key); },
-      async *list(prefix: string) { yield* inner.list(prefix); },
+      async has(key: string) {
+        return inner.has(key);
+      },
+      async *list(prefix: string) {
+        yield* inner.list(prefix);
+      },
       async getRange(key: string, offset: number, length: number) {
         rangesRequested.push({ key, offset, length });
         return inner.getRange!(key, offset, length);
@@ -75,9 +85,15 @@ describe("Byte-range requests", () => {
 
   // Chunk loader actually uses getRange for uncompressed slice reads
   it("chunk loader uses getRange for uncompressed array slices", async () => {
-    const inner = new FileSystemStore({ path: join(FIXTURES, "uncompressed_2d") });
+    const inner = new FileSystemStore({
+      path: join(FIXTURES, "uncompressed_2d"),
+    });
 
-    const rangesRequested: Array<{ key: string; offset: number; length: number }> = [];
+    const rangesRequested: Array<{
+      key: string;
+      offset: number;
+      length: number;
+    }> = [];
     const fullGets: string[] = [];
 
     const trackingStore: Store = {
@@ -85,8 +101,12 @@ describe("Byte-range requests", () => {
         fullGets.push(key);
         return inner.get(key);
       },
-      async has(key: string) { return inner.has(key); },
-      async *list(prefix: string) { yield* inner.list(prefix); },
+      async has(key: string) {
+        return inner.has(key);
+      },
+      async *list(prefix: string) {
+        yield* inner.list(prefix);
+      },
       async getRange(key: string, offset: number, length: number) {
         rangesRequested.push({ key, offset, length });
         return inner.getRange!(key, offset, length);
@@ -117,18 +137,29 @@ describe("Byte-range requests", () => {
 
   // T021b: Fallback when store does NOT support getRange
   it("falls back to full chunk fetch when store has no getRange", async () => {
-    const inner = new FileSystemStore({ path: join(FIXTURES, "uncompressed_2d") });
+    const inner = new FileSystemStore({
+      path: join(FIXTURES, "uncompressed_2d"),
+    });
 
     // Store without getRange
     const noRangeStore: Store = {
-      async get(key: string) { return inner.get(key); },
-      async has(key: string) { return inner.has(key); },
-      async *list(prefix: string) { yield* inner.list(prefix); },
+      async get(key: string) {
+        return inner.get(key);
+      },
+      async has(key: string) {
+        return inner.has(key);
+      },
+      async *list(prefix: string) {
+        yield* inner.list(prefix);
+      },
     };
 
     // Should still work via full chunk fetch
     const arr = await openArray(noRangeStore);
-    const data = await arr.get([[0, 1], [0, 1]]);
+    const data = await arr.get([
+      [0, 1],
+      [0, 1],
+    ]);
     expect(data.length).toBe(1);
   });
 });

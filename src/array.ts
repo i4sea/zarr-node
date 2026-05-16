@@ -47,12 +47,7 @@ export class ZarrArray {
   private readonly basePath: string;
   private readonly codec: Codec | null;
 
-  constructor(
-    store: Store,
-    meta: ZarrayMeta,
-    attrs: Zattrs,
-    basePath: string,
-  ) {
+  constructor(store: Store, meta: ZarrayMeta, attrs: Zattrs, basePath: string) {
     this.store = store;
     this.meta = meta;
     this.shape = meta.shape;
@@ -64,8 +59,7 @@ export class ZarrArray {
 
     // Resolve fill_value
     if (meta.fill_value === null || meta.fill_value === "NaN") {
-      this.fillValue =
-        meta.fill_value === "NaN" ? NaN : null;
+      this.fillValue = meta.fill_value === "NaN" ? NaN : null;
     } else if (meta.fill_value === "Infinity") {
       this.fillValue = Infinity;
     } else if (meta.fill_value === "-Infinity") {
@@ -83,10 +77,7 @@ export class ZarrArray {
     }
   }
 
-  async get(
-    selection?: Slice,
-    options?: ReadOptions,
-  ): Promise<TypedArray> {
+  async get(selection?: Slice, options?: ReadOptions): Promise<TypedArray> {
     const concurrency = options?.concurrency ?? DEFAULT_CONCURRENCY;
     const memoryCache = options?.memoryCache ?? null;
 
@@ -97,7 +88,10 @@ export class ZarrArray {
     return this.getFull(concurrency, memoryCache);
   }
 
-  private async getFull(concurrency: number, memoryCache: MemoryCache | null): Promise<TypedArray> {
+  private async getFull(
+    concurrency: number,
+    memoryCache: MemoryCache | null,
+  ): Promise<TypedArray> {
     const ndim = this.shape.length;
     const ranges = computeChunkRanges(this.shape, this.chunks);
     const byteSize = dtypeByteSize(this.dtype);
@@ -195,8 +189,9 @@ export class ZarrArray {
       outputLinear: number,
     ): void => {
       if (dim === ndim) {
-        (output as unknown as number[])[outputLinear] =
-          (chunkData as unknown as number[])[chunkLinear];
+        (output as unknown as number[])[outputLinear] = (
+          chunkData as unknown as number[]
+        )[chunkLinear];
         return;
       }
       for (let i = 0; i < actualChunkShape[dim]; i++) {
@@ -228,7 +223,9 @@ export class ZarrArray {
     // Build chunk tasks (only needed chunks)
     // For uncompressed C-order arrays, try to compute byte ranges for partial reads
     const canByteRange =
-      this.codec === null && this.order === "C" && typeof this.store.getRange === "function";
+      this.codec === null &&
+      this.order === "C" &&
+      typeof this.store.getRange === "function";
 
     const tasks: ChunkTask[] = [];
     for (const coord of allChunkCoords(chunkRanges)) {
@@ -345,12 +342,13 @@ export class ZarrArray {
       outputLinear: number,
     ): void => {
       if (dim === ndim) {
-        (output as unknown as number[])[outputLinear] =
-          (partialData as unknown as number[])[partialLinear];
+        (output as unknown as number[])[outputLinear] = (
+          partialData as unknown as number[]
+        )[partialLinear];
         return;
       }
       for (let i = 0; i < overlapShape[dim]; i++) {
-        const outputIdx = (overlapStart[dim] - ranges[dim].start) + i;
+        const outputIdx = overlapStart[dim] - ranges[dim].start + i;
         copyRecursive(
           dim + 1,
           partialLinear + i * partialStrides[dim],
@@ -434,12 +432,8 @@ export class ZarrArray {
     );
 
     // Overlap: max(sliceStart, chunkStart) .. min(sliceStop, chunkEnd)
-    const overlapStart = ranges.map((r, d) =>
-      Math.max(r.start, chunkStart[d]),
-    );
-    const overlapEnd = ranges.map((r, d) =>
-      Math.min(r.stop, chunkEnd[d]),
-    );
+    const overlapStart = ranges.map((r, d) => Math.max(r.start, chunkStart[d]));
+    const overlapEnd = ranges.map((r, d) => Math.min(r.stop, chunkEnd[d]));
 
     const copyRecursive = (
       dim: number,
@@ -447,8 +441,9 @@ export class ZarrArray {
       outputLinear: number,
     ): void => {
       if (dim === ndim) {
-        (output as unknown as number[])[outputLinear] =
-          (chunkData as unknown as number[])[chunkLinear];
+        (output as unknown as number[])[outputLinear] = (
+          chunkData as unknown as number[]
+        )[chunkLinear];
         return;
       }
       for (let i = overlapStart[dim]; i < overlapEnd[dim]; i++) {

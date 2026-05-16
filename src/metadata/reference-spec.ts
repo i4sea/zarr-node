@@ -47,7 +47,8 @@ export function parseReferenceSpec(raw: string): ReferenceSpec {
         typeof value[0] === "string" &&
         typeof value[1] === "number" &&
         typeof value[2] === "number"
-      ) continue;
+      )
+        continue;
       throw new MetadataError(
         `Invalid reference for key "${key}": array must have 1 or 3 elements`,
       );

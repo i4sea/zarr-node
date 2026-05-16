@@ -56,16 +56,18 @@ describe("readMultiple", () => {
         currentConcurrent--;
         return result;
       },
-      async has(key: string) { return inner.has(key); },
-      async *list(prefix: string) { yield* inner.list(prefix); },
+      async has(key: string) {
+        return inner.has(key);
+      },
+      async *list(prefix: string) {
+        yield* inner.list(prefix);
+      },
     };
 
     const root = await openGroup(trackingStore);
-    await root.readMultiple(
-      ["temperature", "wind"],
-      undefined,
-      { concurrency: 2 },
-    );
+    await root.readMultiple(["temperature", "wind"], undefined, {
+      concurrency: 2,
+    });
 
     // Should respect concurrency limit
     expect(maxConcurrent).toBeLessThanOrEqual(2);
@@ -76,9 +78,11 @@ describe("readMultiple", () => {
     const store = new FileSystemStore({ path: join(FIXTURES, "multi_array") });
     const root = await openGroup(store);
 
-    const results = await root.readMultiple(
-      ["temperature", "nonexistent_array", "wind"],
-    );
+    const results = await root.readMultiple([
+      "temperature",
+      "nonexistent_array",
+      "wind",
+    ]);
 
     // Valid arrays should succeed
     expect(results.has("temperature")).toBe(true);

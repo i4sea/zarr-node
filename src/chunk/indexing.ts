@@ -23,10 +23,7 @@ export function computeChunkRanges(
 /**
  * Build the chunk key string from chunk indices and separator.
  */
-export function chunkKey(
-  indices: number[],
-  separator: "." | "/",
-): string {
+export function chunkKey(indices: number[], separator: "." | "/"): string {
   return indices.join(separator);
 }
 
@@ -34,9 +31,7 @@ export function chunkKey(
  * Generate all chunk coordinate tuples from per-dimension ranges.
  * Uses a cartesian product of the ranges.
  */
-export function* allChunkCoords(
-  ranges: number[][],
-): Generator<number[]> {
+export function* allChunkCoords(ranges: number[][]): Generator<number[]> {
   const ndim = ranges.length;
   if (ndim === 0) {
     yield [];

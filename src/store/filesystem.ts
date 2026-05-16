@@ -28,7 +28,11 @@ export class FileSystemStore implements Store {
     }
   }
 
-  async getRange(key: string, offset: number, length: number): Promise<Uint8Array | null> {
+  async getRange(
+    key: string,
+    offset: number,
+    length: number,
+  ): Promise<Uint8Array | null> {
     const filePath = join(this.root, key);
     try {
       const fh = await fsOpen(filePath, "r");

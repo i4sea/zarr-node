@@ -16,13 +16,17 @@ export interface ReferenceStoreOptions {
  * Maps virtual Zarr chunk keys to byte ranges in target files.
  */
 export class ReferenceStore implements Store {
-  private readonly refs: Map<string, string | [string] | [string, number, number]>;
+  private readonly refs: Map<
+    string,
+    string | [string] | [string, number, number]
+  >;
   private readonly innerStores = new Map<string, Store>();
 
   constructor(options: ReferenceStoreOptions) {
-    const spec = typeof options.spec === "string"
-      ? parseReferenceSpec(options.spec)
-      : options.spec;
+    const spec =
+      typeof options.spec === "string"
+        ? parseReferenceSpec(options.spec)
+        : options.spec;
 
     this.refs = new Map(Object.entries(spec.refs));
   }
@@ -95,7 +99,8 @@ export class ReferenceStore implements Store {
       // Parse s3://bucket/prefix from URL
       const withoutScheme = url.slice(5); // remove "s3://"
       const slashIdx = withoutScheme.indexOf("/");
-      const bucket = slashIdx === -1 ? withoutScheme : withoutScheme.slice(0, slashIdx);
+      const bucket =
+        slashIdx === -1 ? withoutScheme : withoutScheme.slice(0, slashIdx);
 
       // Dynamic import — S3Store is optional peer dependency
       try {

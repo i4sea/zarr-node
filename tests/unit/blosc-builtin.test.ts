@@ -10,7 +10,9 @@ const FIXTURES = join(import.meta.dirname, "..", "fixtures");
 describe("Blosc built-in codec", () => {
   // T001: Blosc-compressed array reads without manual registration
   it("reads Blosc-compressed array without manual registration", async () => {
-    const store = new FileSystemStore({ path: join(FIXTURES, "compressed_blosc") });
+    const store = new FileSystemStore({
+      path: join(FIXTURES, "compressed_blosc"),
+    });
     const arr = await openArray(store);
 
     const data = await arr.get();
@@ -25,7 +27,9 @@ describe("Blosc built-in codec", () => {
 
   // T002: All Blosc sub-codecs handled via CompressorConfig passthrough
   it("handles Blosc with zstd sub-codec", async () => {
-    const store = new FileSystemStore({ path: join(FIXTURES, "compressed_blosc_zstd") });
+    const store = new FileSystemStore({
+      path: join(FIXTURES, "compressed_blosc_zstd"),
+    });
     const arr = await openArray(store);
 
     const data = await arr.get();
@@ -52,7 +56,9 @@ describe("Blosc built-in codec", () => {
 
     codecRegistry.register("blosc", () => customCodec);
 
-    const store = new FileSystemStore({ path: join(FIXTURES, "compressed_blosc") });
+    const store = new FileSystemStore({
+      path: join(FIXTURES, "compressed_blosc"),
+    });
     const arr = await openArray(store);
     await arr.get();
 

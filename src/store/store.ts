@@ -3,7 +3,11 @@ export interface Store {
   has(key: string): Promise<boolean>;
   list(prefix: string): AsyncIterable<string>;
   /** Fetch a byte range from a key. Optional — not all stores support this. */
-  getRange?(key: string, offset: number, length: number): Promise<Uint8Array | null>;
+  getRange?(
+    key: string,
+    offset: number,
+    length: number,
+  ): Promise<Uint8Array | null>;
 }
 
 export interface FileSystemStoreOptions {

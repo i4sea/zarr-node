@@ -23,7 +23,9 @@ describe("ReferenceStore", () => {
     expect(new TextDecoder().decode(zgroup!)).toBe('{"zarr_format":2}');
 
     const zattrs = await store.get(".zattrs");
-    expect(new TextDecoder().decode(zattrs!)).toBe('{"description":"inline test"}');
+    expect(new TextDecoder().decode(zattrs!)).toBe(
+      '{"description":"inline test"}',
+    );
   });
 
   // T028: Byte-range references [url, offset, length] pointing to local files

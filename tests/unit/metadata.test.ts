@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { parseZarrayMeta, parseZgroupMeta, parseZattrs } from "../../src/metadata/v2.js";
+import {
+  parseZarrayMeta,
+  parseZgroupMeta,
+  parseZattrs,
+} from "../../src/metadata/v2.js";
 
 describe("parseZarrayMeta", () => {
   it("parses a valid .zarray JSON", () => {

@@ -8,7 +8,10 @@ describe("DiskCache LRU eviction", () => {
   let cacheDir: string;
 
   beforeEach(() => {
-    cacheDir = join(tmpdir(), `zarr-disk-lru-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    cacheDir = join(
+      tmpdir(),
+      `zarr-disk-lru-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
   });
 
   afterEach(async () => {

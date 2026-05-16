@@ -80,7 +80,11 @@ export class S3Store implements Store {
     }
   }
 
-  async getRange(key: string, offset: number, length: number): Promise<Uint8Array | null> {
+  async getRange(
+    key: string,
+    offset: number,
+    length: number,
+  ): Promise<Uint8Array | null> {
     const client = await this.getClient();
     const fullKey = this.resolveKey(key);
     const end = offset + length - 1;
@@ -116,9 +120,7 @@ export class S3Store implements Store {
 
   async *list(prefix: string): AsyncIterable<string> {
     const client = await this.getClient();
-    const fullPrefix = this.prefix
-      ? `${this.prefix}/${prefix}`
-      : prefix;
+    const fullPrefix = this.prefix ? `${this.prefix}/${prefix}` : prefix;
 
     const sdk = await loadS3SDK();
     let continuationToken: string | undefined;

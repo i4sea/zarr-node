@@ -9,7 +9,10 @@ import type { Store } from "../../src/store/store.js";
 const FIXTURES = join(import.meta.dirname, "..", "fixtures");
 
 async function loadExpected(fixtureName: string) {
-  const raw = await readFile(join(FIXTURES, fixtureName, "expected.json"), "utf-8");
+  const raw = await readFile(
+    join(FIXTURES, fixtureName, "expected.json"),
+    "utf-8",
+  );
   return JSON.parse(raw) as {
     shape: number[];
     dtype: string;
@@ -232,7 +235,10 @@ describe("Slice reads", () => {
     const arr = await openArray(store);
 
     // shape [100, 200], slice [0:10, 50:60] -> 10x10 region
-    const slice = await arr.get([[0, 10], [50, 60]]);
+    const slice = await arr.get([
+      [0, 10],
+      [50, 60],
+    ]);
     expect(slice.length).toBe(100); // 10 * 10
 
     // Verify values match expected full data at those positions
@@ -264,7 +270,10 @@ describe("Slice reads", () => {
     const arr = await openArray(store);
 
     // chunks are [10, 20], slice [5:15, 15:25] spans chunk boundaries
-    const slice = await arr.get([[5, 15], [15, 25]]);
+    const slice = await arr.get([
+      [5, 15],
+      [15, 25],
+    ]);
     expect(slice.length).toBe(100); // 10 * 10
     for (let r = 0; r < 10; r++) {
       for (let c = 0; c < 10; c++) {
