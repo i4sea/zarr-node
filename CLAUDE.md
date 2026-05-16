@@ -34,4 +34,10 @@ TypeScript 5.x with `strict: true`, targeting ES2022: Follow standard convention
 
 
 <!-- MANUAL ADDITIONS START -->
+
+## Git conventions
+
+- **Never add `Co-Authored-By: Claude` (or any AI assistant) trailer to commit messages.** Authorship stays with the human committer. This applies to all commits, including ones drafted entirely by an assistant.
+- Use conventional commit prefixes (`feat:`, `fix:`, `chore:`, `refactor:`, `docs:`, `test:`).
+
 <!-- MANUAL ADDITIONS END -->
