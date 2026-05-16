@@ -11,7 +11,10 @@ const FIXTURES = join(import.meta.dirname, "..", "fixtures");
 let cacheDir: string;
 
 beforeEach(() => {
-  cacheDir = join(tmpdir(), `zarr-cached-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  cacheDir = join(
+    tmpdir(),
+    `zarr-cached-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
 });
 
 afterEach(async () => {
@@ -27,8 +30,12 @@ describe("CachedStore — basic caching (US1)", () => {
         fetchCount++;
         return inner.get(key);
       },
-      async has(key: string) { return inner.has(key); },
-      async *list(prefix: string) { yield* inner.list(prefix); },
+      async has(key: string) {
+        return inner.has(key);
+      },
+      async *list(prefix: string) {
+        yield* inner.list(prefix);
+      },
     };
 
     const cached = new CachedStore(counting, { cacheDir, storeId: "test" });
@@ -61,7 +68,11 @@ describe("CachedStore — basic caching (US1)", () => {
     // Check cache directory — should only contain chunk files, not .zarray/.zattrs
     const storeEntries = await listRecursive(cacheDir);
     const metadataFiles = storeEntries.filter(
-      (f) => f.endsWith(".zarray") || f.endsWith(".zattrs") || f.endsWith(".zgroup") || f.endsWith(".zmetadata"),
+      (f) =>
+        f.endsWith(".zarray") ||
+        f.endsWith(".zattrs") ||
+        f.endsWith(".zgroup") ||
+        f.endsWith(".zmetadata"),
     );
     expect(metadataFiles).toEqual([]);
   });
@@ -100,7 +111,11 @@ describe("CachedStore — opt-in behavior (US2)", () => {
 
   it("FileSystemStore wrapped with CachedStore skips caching (FR-009)", async () => {
     const inner = new FileSystemStore({ path: join(FIXTURES, "simple_1d") });
-    const cached = new CachedStore(inner, { cacheDir, storeId: "test", skipLocal: true });
+    const cached = new CachedStore(inner, {
+      cacheDir,
+      storeId: "test",
+      skipLocal: true,
+    });
     const arr = await openArray(cached);
     await arr.get();
 
@@ -117,7 +132,10 @@ describe("CachedStore — opt-in behavior (US2)", () => {
     const inner = new FileSystemStore({ path: join(FIXTURES, "chunked_2d") });
     const cached = new CachedStore(inner, { cacheDir, storeId: "test" });
     const arr = await openArray(cached);
-    await arr.get([[0, 1], [0, 1]]); // Small slice — chunk 0.0
+    await arr.get([
+      [0, 1],
+      [0, 1],
+    ]); // Small slice — chunk 0.0
 
     const files = await listRecursive(cacheDir);
     const chunkFiles = files.filter((f) => !f.includes(".tmp"));
@@ -128,7 +146,11 @@ describe("CachedStore — opt-in behavior (US2)", () => {
 describe("CachedStore — TTL (US3)", () => {
   it("serves from cache within TTL", async () => {
     const inner = new FileSystemStore({ path: join(FIXTURES, "simple_1d") });
-    const cached = new CachedStore(inner, { cacheDir, storeId: "test", ttl: 60 });
+    const cached = new CachedStore(inner, {
+      cacheDir,
+      storeId: "test",
+      ttl: 60,
+    });
     const arr = await openArray(cached);
 
     await arr.get();
@@ -165,9 +187,16 @@ describe("CachedStore — cross-session (US4)", () => {
     // Session 2: new CachedStore, same cacheDir
     let fetchCount = 0;
     const counting: Store = {
-      async get(key: string) { fetchCount++; return inner.get(key); },
-      async has(key: string) { return inner.has(key); },
-      async *list(prefix: string) { yield* inner.list(prefix); },
+      async get(key: string) {
+        fetchCount++;
+        return inner.get(key);
+      },
+      async has(key: string) {
+        return inner.has(key);
+      },
+      async *list(prefix: string) {
+        yield* inner.list(prefix);
+      },
     };
     const cached2 = new CachedStore(counting, { cacheDir, storeId: "test" });
     fetchCount = 0;
@@ -180,7 +209,7 @@ describe("CachedStore — cross-session (US4)", () => {
 });
 
 async function listRecursive(dir: string): Promise<string[]> {
-  const { readdir: rd, stat: st } = await import("node:fs/promises");
+  const { readdir: rd } = await import("node:fs/promises");
   const results: string[] = [];
   try {
     const entries = await rd(dir, { withFileTypes: true });

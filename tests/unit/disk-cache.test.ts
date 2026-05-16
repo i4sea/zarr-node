@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdir, rm, readdir, writeFile, stat, utimes } from "node:fs/promises";
+import { rm, readdir, writeFile, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DiskCache } from "../../src/cache/disk.js";
@@ -7,7 +7,10 @@ import { DiskCache } from "../../src/cache/disk.js";
 let cacheDir: string;
 
 beforeEach(async () => {
-  cacheDir = join(tmpdir(), `zarr-cache-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  cacheDir = join(
+    tmpdir(),
+    `zarr-cache-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
 });
 
 afterEach(async () => {
@@ -64,10 +67,7 @@ describe("DiskCache", () => {
     const data2 = new Uint8Array(1000).fill(2);
 
     // Run concurrently — atomic writes should prevent corruption
-    await Promise.all([
-      cache.set("chunk", data1),
-      cache.set("chunk", data2),
-    ]);
+    await Promise.all([cache.set("chunk", data1), cache.set("chunk", data2)]);
 
     const result = await cache.get("chunk");
     expect(result).not.toBeNull();

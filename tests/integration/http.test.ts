@@ -1,11 +1,14 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type Server,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
 import { join } from "node:path";
-import { readFile, readdir, access } from "node:fs/promises";
+import { readFile, access } from "node:fs/promises";
 import { HTTPStore } from "../../src/store/http.js";
-import { runStoreContractTests } from "../contract/store.contract.js";
 import { openArray } from "../../src/index.js";
-import { FileSystemStore } from "../../src/store/filesystem.js";
 
 const FIXTURES = join(import.meta.dirname, "..", "fixtures");
 let server: Server;
@@ -14,57 +17,59 @@ let baseUrl: string;
 // Simple static file server for fixtures
 function createFixtureServer(): Promise<{ server: Server; url: string }> {
   return new Promise((resolve) => {
-    const srv = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-      const urlPath = decodeURIComponent(req.url ?? "/");
+    const srv = createServer(
+      async (req: IncomingMessage, res: ServerResponse) => {
+        const urlPath = decodeURIComponent(req.url ?? "/");
 
-      // Contract test routes
-      if (urlPath === "/contract/test-key") {
-        res.writeHead(200);
-        res.end(Buffer.from([1, 2, 3]));
-        return;
-      }
-      if (urlPath === "/contract/prefix/a") {
-        res.writeHead(200);
-        res.end(Buffer.from([10]));
-        return;
-      }
-      if (urlPath === "/contract/prefix/b") {
-        res.writeHead(200);
-        res.end(Buffer.from([20]));
-        return;
-      }
-
-      // Retry test endpoint
-      if (urlPath === "/retry-test") {
-        const count = retryCounter++;
-        if (count < 2) {
-          res.writeHead(503);
-          res.end("Service Unavailable");
+        // Contract test routes
+        if (urlPath === "/contract/test-key") {
+          res.writeHead(200);
+          res.end(Buffer.from([1, 2, 3]));
           return;
         }
-        res.writeHead(200);
-        res.end(Buffer.from([42]));
-        return;
-      }
+        if (urlPath === "/contract/prefix/a") {
+          res.writeHead(200);
+          res.end(Buffer.from([10]));
+          return;
+        }
+        if (urlPath === "/contract/prefix/b") {
+          res.writeHead(200);
+          res.end(Buffer.from([20]));
+          return;
+        }
 
-      // Timeout test endpoint
-      if (urlPath === "/timeout-test") {
-        // Don't respond - let it timeout
-        return;
-      }
+        // Retry test endpoint
+        if (urlPath === "/retry-test") {
+          const count = retryCounter++;
+          if (count < 2) {
+            res.writeHead(503);
+            res.end("Service Unavailable");
+            return;
+          }
+          res.writeHead(200);
+          res.end(Buffer.from([42]));
+          return;
+        }
 
-      // Serve fixture files
-      const filePath = join(FIXTURES, urlPath);
-      try {
-        await access(filePath);
-        const data = await readFile(filePath);
-        res.writeHead(200);
-        res.end(data);
-      } catch {
-        res.writeHead(404);
-        res.end("Not Found");
-      }
-    });
+        // Timeout test endpoint
+        if (urlPath === "/timeout-test") {
+          // Don't respond - let it timeout
+          return;
+        }
+
+        // Serve fixture files
+        const filePath = join(FIXTURES, urlPath);
+        try {
+          await access(filePath);
+          const data = await readFile(filePath);
+          res.writeHead(200);
+          res.end(data);
+        } catch {
+          res.writeHead(404);
+          res.end("Not Found");
+        }
+      },
+    );
 
     srv.listen(0, "127.0.0.1", () => {
       const addr = srv.address();

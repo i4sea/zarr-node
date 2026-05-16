@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { join } from "node:path";
-import { readFile } from "node:fs/promises";
 import { FileSystemStore } from "../../src/store/filesystem.js";
 import { openGroup, open } from "../../src/index.js";
 import { ZarrGroup } from "../../src/group.js";
@@ -76,14 +75,12 @@ describe("Consolidated metadata — reduces store calls (US1)", () => {
     });
 
     let getCalls = 0;
-    let hasCalls = 0;
     const countingStore: Store = {
       async get(key: string) {
         getCalls++;
         return inner.get(key);
       },
       async has(key: string) {
-        hasCalls++;
         return inner.has(key);
       },
       async *list(prefix: string) {

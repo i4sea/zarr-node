@@ -33,7 +33,7 @@ export async function loadChunks(
   let index = 0;
 
   // Can we use byte-range requests? Only when uncompressed and store supports it.
-  const useByteRange = codec === null && typeof store.getRange === "function";
+  const getRange = codec === null ? store.getRange?.bind(store) : undefined;
 
   async function processTask(task: ChunkTask): Promise<LoadedChunk> {
     // Check memory cache first
@@ -45,8 +45,8 @@ export async function loadChunks(
     }
 
     // Use byte-range fetch for uncompressed partial reads
-    if (useByteRange && task.byteRange) {
-      const partial = await store.getRange!(
+    if (getRange && task.byteRange) {
+      const partial = await getRange(
         task.key,
         task.byteRange.offset,
         task.byteRange.length,
