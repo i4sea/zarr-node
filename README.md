@@ -19,8 +19,16 @@ Read-only Zarr v2 array reader for Node.js. Server-first, with FileSystem, HTTP,
 
 ## Install
 
+Published to GitHub Packages under the `@i4sea` scope. Add this to a `.npmrc` in your consumer project (or `~/.npmrc`):
+
+```
+@i4sea:registry=https://npm.pkg.github.com
+```
+
+Then install:
+
 ```bash
-npm install zarr-node
+npm install @i4sea/zarr-node
 ```
 
 For S3 support, install the peer dependency:
@@ -34,7 +42,7 @@ npm install @aws-sdk/client-s3
 ### Read an array from the filesystem
 
 ```typescript
-import { FileSystemStore, open } from "zarr-node";
+import { FileSystemStore, open } from "@i4sea/zarr-node";
 
 const store = new FileSystemStore("/path/to/zarr");
 const array = await open(store);
@@ -52,7 +60,7 @@ const slice = await array.read([
 ### Read from HTTP
 
 ```typescript
-import { HTTPStore, open } from "zarr-node";
+import { HTTPStore, open } from "@i4sea/zarr-node";
 
 const store = new HTTPStore("https://example.com/data.zarr");
 const array = await open(store);
@@ -62,7 +70,7 @@ const data = await array.read();
 ### Read from S3
 
 ```typescript
-import { S3Store, open } from "zarr-node";
+import { S3Store, open } from "@i4sea/zarr-node";
 
 const store = new S3Store({
   bucket: "my-bucket",
@@ -76,7 +84,7 @@ const data = await array.read();
 ### Groups and multi-array reads
 
 ```typescript
-import { FileSystemStore, openGroup } from "zarr-node";
+import { FileSystemStore, openGroup } from "@i4sea/zarr-node";
 
 const store = new FileSystemStore("/path/to/zarr-group");
 const group = await openGroup(store);
@@ -94,7 +102,7 @@ const results = await group.readMultiple(
 ### Caching
 
 ```typescript
-import { FileSystemStore, CachedStore, MemoryCache, open } from "zarr-node";
+import { FileSystemStore, CachedStore, MemoryCache, open } from "@i4sea/zarr-node";
 
 // Disk cache (persists across restarts)
 const inner = new FileSystemStore("/path/to/zarr");
@@ -112,7 +120,7 @@ const data = await array.read(null, { memoryCache: memCache });
 ### Reference filesystem (kerchunk)
 
 ```typescript
-import { ReferenceStore, open } from "zarr-node";
+import { ReferenceStore, open } from "@i4sea/zarr-node";
 import { readFile } from "node:fs/promises";
 
 const manifest = JSON.parse(await readFile("output.json", "utf-8"));
