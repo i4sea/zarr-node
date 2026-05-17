@@ -57,6 +57,20 @@ const slice = await array.read([
 ]);
 ```
 
+### Integer dtypes (int64 / uint64)
+
+Arrays with dtype `<i8`, `>i8`, `<u8`, or `>u8` are returned as `BigInt64Array`
+or `BigUint64Array`. Their elements are `bigint`, not `number`. Coerce with
+`Number(value)` when you need a plain number — this is safe for epoch-seconds
+up to year 285K AD and for epoch-nanoseconds up to year 2262. Beyond those
+ranges precision is lost.
+
+```typescript
+const timeArray = await group.getArray("time"); // dtype "<i8"
+const data = await timeArray.read();              // BigInt64Array
+const seconds = Number(data[0]);                  // bigint -> number
+```
+
 ### Read from HTTP
 
 ```typescript

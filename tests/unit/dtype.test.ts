@@ -43,6 +43,22 @@ describe("dtypeToTypedArrayCtor", () => {
     expect(dtypeToTypedArrayCtor("<u4")).toBe(Uint32Array);
   });
 
+  it("maps <i8 to BigInt64Array", () => {
+    expect(dtypeToTypedArrayCtor("<i8")).toBe(BigInt64Array);
+  });
+
+  it("maps >i8 to BigInt64Array", () => {
+    expect(dtypeToTypedArrayCtor(">i8")).toBe(BigInt64Array);
+  });
+
+  it("maps <u8 to BigUint64Array", () => {
+    expect(dtypeToTypedArrayCtor("<u8")).toBe(BigUint64Array);
+  });
+
+  it("maps >u8 to BigUint64Array", () => {
+    expect(dtypeToTypedArrayCtor(">u8")).toBe(BigUint64Array);
+  });
+
   it("throws on unsupported dtype", () => {
     expect(() => dtypeToTypedArrayCtor("<c8")).toThrow("Unsupported dtype");
   });
@@ -63,6 +79,14 @@ describe("dtypeByteSize", () => {
 
   it("returns 2 for <i2", () => {
     expect(dtypeByteSize("<i2")).toBe(2);
+  });
+
+  it("returns 8 for <i8", () => {
+    expect(dtypeByteSize("<i8")).toBe(8);
+  });
+
+  it("returns 8 for <u8", () => {
+    expect(dtypeByteSize("<u8")).toBe(8);
   });
 });
 

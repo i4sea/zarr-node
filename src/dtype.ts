@@ -8,7 +8,9 @@ export type TypedArray =
   | Int32Array
   | Uint32Array
   | Float32Array
-  | Float64Array;
+  | Float64Array
+  | BigInt64Array
+  | BigUint64Array;
 
 export type TypedArrayConstructor =
   | Int8ArrayConstructor
@@ -18,7 +20,9 @@ export type TypedArrayConstructor =
   | Int32ArrayConstructor
   | Uint32ArrayConstructor
   | Float32ArrayConstructor
-  | Float64ArrayConstructor;
+  | Float64ArrayConstructor
+  | BigInt64ArrayConstructor
+  | BigUint64ArrayConstructor;
 
 const DTYPE_MAP: Record<
   string,
@@ -39,6 +43,10 @@ const DTYPE_MAP: Record<
   ">f4": { ctor: Float32Array, byteSize: 4 },
   "<f8": { ctor: Float64Array, byteSize: 8 },
   ">f8": { ctor: Float64Array, byteSize: 8 },
+  "<i8": { ctor: BigInt64Array, byteSize: 8 },
+  ">i8": { ctor: BigInt64Array, byteSize: 8 },
+  "<u8": { ctor: BigUint64Array, byteSize: 8 },
+  ">u8": { ctor: BigUint64Array, byteSize: 8 },
 };
 
 function lookupDtype(dtype: string) {

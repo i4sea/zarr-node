@@ -343,4 +343,131 @@ describe("Custom store usage", () => {
     expect(result[2]).toBe(30);
     expect(result[3]).toBe(40);
   });
+
+  it("reads a little-endian int64 array (<i8) as BigInt64Array", async () => {
+    const zarray = JSON.stringify({
+      zarr_format: 2,
+      shape: [3],
+      chunks: [3],
+      dtype: "<i8",
+      compressor: null,
+      fill_value: 0,
+      order: "C",
+      dimension_separator: ".",
+      filters: null,
+    });
+
+    const chunkData = new BigInt64Array([0n, 3600n, 7200n]);
+    const chunkBytes = new Uint8Array(chunkData.buffer);
+
+    const data = new Map<string, Uint8Array>([
+      [".zarray", new TextEncoder().encode(zarray)],
+      ["0", chunkBytes],
+    ]);
+
+    const mockStore: Store = {
+      async get(key: string) {
+        return data.get(key) ?? null;
+      },
+      async has(key: string) {
+        return data.has(key);
+      },
+      async *list(_prefix: string) {
+        for (const key of data.keys()) {
+          yield key;
+        }
+      },
+    };
+
+    const arr = await openArray(mockStore);
+    const result = await arr.get();
+    expect(result).toBeInstanceOf(BigInt64Array);
+    expect(Array.from(result as BigInt64Array)).toEqual([0n, 3600n, 7200n]);
+  });
+
+  it("reads a big-endian int64 array (>i8) with byte swap", async () => {
+    const zarray = JSON.stringify({
+      zarr_format: 2,
+      shape: [3],
+      chunks: [3],
+      dtype: ">i8",
+      compressor: null,
+      fill_value: 0,
+      order: "C",
+      dimension_separator: ".",
+      filters: null,
+    });
+
+    const values = [0n, 3600n, 7200n];
+    const chunkBytes = new Uint8Array(values.length * 8);
+    const view = new DataView(chunkBytes.buffer);
+    for (let i = 0; i < values.length; i++) {
+      view.setBigInt64(i * 8, values[i], false); // big-endian
+    }
+
+    const data = new Map<string, Uint8Array>([
+      [".zarray", new TextEncoder().encode(zarray)],
+      ["0", chunkBytes],
+    ]);
+
+    const mockStore: Store = {
+      async get(key: string) {
+        return data.get(key) ?? null;
+      },
+      async has(key: string) {
+        return data.has(key);
+      },
+      async *list(_prefix: string) {
+        for (const key of data.keys()) {
+          yield key;
+        }
+      },
+    };
+
+    const arr = await openArray(mockStore);
+    const result = await arr.get();
+    expect(result).toBeInstanceOf(BigInt64Array);
+    expect(Array.from(result as BigInt64Array)).toEqual([0n, 3600n, 7200n]);
+  });
+
+  it("reads a little-endian uint64 array (<u8) as BigUint64Array", async () => {
+    const zarray = JSON.stringify({
+      zarr_format: 2,
+      shape: [3],
+      chunks: [3],
+      dtype: "<u8",
+      compressor: null,
+      fill_value: 0,
+      order: "C",
+      dimension_separator: ".",
+      filters: null,
+    });
+
+    const chunkData = new BigUint64Array([1n, 2n, 3n]);
+    const chunkBytes = new Uint8Array(chunkData.buffer);
+
+    const data = new Map<string, Uint8Array>([
+      [".zarray", new TextEncoder().encode(zarray)],
+      ["0", chunkBytes],
+    ]);
+
+    const mockStore: Store = {
+      async get(key: string) {
+        return data.get(key) ?? null;
+      },
+      async has(key: string) {
+        return data.has(key);
+      },
+      async *list(_prefix: string) {
+        for (const key of data.keys()) {
+          yield key;
+        }
+      },
+    };
+
+    const arr = await openArray(mockStore);
+    const result = await arr.get();
+    expect(result).toBeInstanceOf(BigUint64Array);
+    expect(Array.from(result as BigUint64Array)).toEqual([1n, 2n, 3n]);
+  });
 });
