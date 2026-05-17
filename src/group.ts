@@ -10,6 +10,7 @@ import {
   parseZattrs,
 } from "./metadata/v2.js";
 import { MetadataError } from "./errors.js";
+import { codecRegistry } from "./codec/codec.js";
 
 export class ZarrGroup {
   readonly attrs: Readonly<Record<string, unknown>>;
@@ -41,7 +42,10 @@ export class ZarrGroup {
     }
     const meta = parseZarrayMeta(new TextDecoder().decode(raw));
     const attrs = await this.loadAttrs(path);
-    return new ZarrArray(this.store, meta, attrs, path);
+    const codec = meta.compressor
+      ? await codecRegistry.get(meta.compressor)
+      : null;
+    return new ZarrArray(this.store, meta, attrs, path, codec);
   }
 
   async getGroup(name: string): Promise<ZarrGroup> {

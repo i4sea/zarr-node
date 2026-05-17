@@ -10,6 +10,7 @@ import {
   parseZattrs,
 } from "./metadata/v2.js";
 import { MetadataError } from "./errors.js";
+import { codecRegistry } from "./codec/codec.js";
 // Re-export public API
 export { ZarrArray } from "./array.js";
 export { ZarrGroup } from "./group.js";
@@ -135,7 +136,11 @@ async function openArrayFromMeta(
     ? parseZattrs(new TextDecoder().decode(zattrsRaw))
     : {};
 
-  return new ZarrArray(store, meta, attrs, basePath);
+  const codec = meta.compressor
+    ? await codecRegistry.get(meta.compressor)
+    : null;
+
+  return new ZarrArray(store, meta, attrs, basePath, codec);
 }
 
 async function openGroupFromMeta(

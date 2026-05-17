@@ -9,7 +9,6 @@ import {
   isBigEndian,
   byteSwap,
 } from "./dtype.js";
-import { codecRegistry } from "./codec/codec.js";
 import {
   computeChunkRanges,
   chunkKey,
@@ -47,7 +46,13 @@ export class ZarrArray {
   private readonly basePath: string;
   private readonly codec: Codec | null;
 
-  constructor(store: Store, meta: ZarrayMeta, attrs: Zattrs, basePath: string) {
+  constructor(
+    store: Store,
+    meta: ZarrayMeta,
+    attrs: Zattrs,
+    basePath: string,
+    codec: Codec | null,
+  ) {
     this.store = store;
     this.meta = meta;
     this.shape = meta.shape;
@@ -69,12 +74,7 @@ export class ZarrArray {
         typeof meta.fill_value === "number" ? meta.fill_value : null;
     }
 
-    // Resolve codec
-    if (meta.compressor === null) {
-      this.codec = null;
-    } else {
-      this.codec = codecRegistry.get(meta.compressor);
-    }
+    this.codec = codec;
   }
 
   async get(selection?: Slice, options?: ReadOptions): Promise<TypedArray> {

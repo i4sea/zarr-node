@@ -51,21 +51,21 @@ describe("codecRegistry", () => {
     expect(codecRegistry.has("gzip")).toBe(true);
   });
 
-  it("creates a codec from compressor config", () => {
-    const codec = codecRegistry.get({ id: "zlib", level: 1 });
+  it("creates a codec from compressor config", async () => {
+    const codec = await codecRegistry.get({ id: "zlib", level: 1 });
     expect(codec.id).toBe("zlib");
   });
 
-  it("throws for unregistered codec with descriptive message", () => {
-    expect(() => codecRegistry.get({ id: "unknown-codec-xyz" })).toThrow(
-      "unknown-codec-xyz",
-    );
-    expect(() => codecRegistry.get({ id: "unknown-codec-xyz" })).toThrow(
-      "register",
-    );
+  it("throws for unregistered codec with descriptive message", async () => {
+    await expect(
+      codecRegistry.get({ id: "unknown-codec-xyz" }),
+    ).rejects.toThrow("unknown-codec-xyz");
+    await expect(
+      codecRegistry.get({ id: "unknown-codec-xyz" }),
+    ).rejects.toThrow("register");
   });
 
-  it("allows registering and using a custom codec", () => {
+  it("allows registering and using a custom codec", async () => {
     codecRegistry.register("custom-xor", (config) => ({
       id: "custom-xor",
       async decode(data: Uint8Array): Promise<Uint8Array> {
@@ -79,20 +79,20 @@ describe("codecRegistry", () => {
     }));
 
     expect(codecRegistry.has("custom-xor")).toBe(true);
-    const codec = codecRegistry.get({ id: "custom-xor", key: 0xaa });
+    const codec = await codecRegistry.get({ id: "custom-xor", key: 0xaa });
     expect(codec.id).toBe("custom-xor");
   });
 
   it("custom codec decodes correctly", async () => {
-    const codec = codecRegistry.get({ id: "custom-xor", key: 0xff });
+    const codec = await codecRegistry.get({ id: "custom-xor", key: 0xff });
     const input = new Uint8Array([0x00, 0xff, 0x55]);
     const output = await codec.decode(input);
     expect(output).toEqual(new Uint8Array([0xff, 0x00, 0xaa]));
   });
 
-  it("error message lists available codecs", () => {
+  it("error message lists available codecs", async () => {
     try {
-      codecRegistry.get({ id: "nonexistent" });
+      await codecRegistry.get({ id: "nonexistent" });
     } catch (err) {
       expect((err as Error).message).toContain("zlib");
       expect((err as Error).message).toContain("gzip");
