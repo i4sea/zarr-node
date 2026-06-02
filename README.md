@@ -14,7 +14,8 @@ Read-only Zarr v2 array reader for Node.js. Server-first, with FileSystem, HTTP,
 - **In-memory LRU cache** for sub-millisecond repeated reads
 - **Built-in Blosc codec** (lz4, zstd, zlib, snappy) — zero configuration
 - **Byte-range requests** for partial chunk fetches on uncompressed data
-- **Multi-array reads** with shared concurrency pool
+- **Bounded memory** — reads cap decoded bytes in flight, not just chunk count
+- **Multi-array reads** sharing one in-flight memory budget
 - **Reference filesystem** (kerchunk) for reading HDF5/NetCDF without conversion
 
 ## Install
@@ -106,12 +107,44 @@ const group = await openGroup(store);
 // List arrays
 const arrays = await group.arrays();
 
-// Read multiple arrays at once (shared concurrency pool)
+// Read multiple arrays at once (shared in-flight memory budget)
 const results = await group.readMultiple(
   ["temperature", "humidity", "wind"],
   [{ start: 0, stop: 10 }],
 );
 ```
+
+### Bounding memory
+
+Reads are bounded by a **decoded-bytes-in-flight budget**, not just a chunk
+count. By default a single `get()` holds at most `maxInFlightBytes` (256 MiB) of
+decoded chunk data at once and copies each chunk into the output as it arrives,
+so peak memory stays predictable even on arrays with large chunks.
+
+```typescript
+// Point over a full axis on a compressed array — bound the decode footprint
+// explicitly (otherwise the 256 MiB default applies).
+const series = await array.get([null, latIdx, lonIdx], {
+  maxInFlightBytes: 64 * 1024 * 1024, // 64 MiB live at once
+  concurrency: 8, // network-request cap; the byte budget binds first on big chunks
+});
+```
+
+> **Compressed point-slices pay full-chunk cost.** Selecting a single
+> `(lat, lon)` from a `blosc`/`gzip`/`zlib` array still downloads and
+> decompresses the *entire* chunk covering that point — partial decode isn't
+> possible for these codecs. The cost is per chunk, not per element, so a wide
+> selection over a chunked axis decodes one full chunk per step. `maxInFlightBytes`
+> bounds how many of those decode concurrently; a `MemoryCache` avoids
+> re-decoding chunks across repeated reads.
+
+`readMultiple` shares **one** budget across all arrays, so reading many
+compressed arrays at once stays bounded by a single ceiling rather than
+`arrays × concurrency × chunkSize`.
+
+Any read whose materialized output would exceed `largeReadWarningBytes`
+(512 MiB) — whether a full-array `get()` or a large slice — logs a one-line
+`console.warn`. Set it to `Infinity` to silence.
 
 ### Caching
 

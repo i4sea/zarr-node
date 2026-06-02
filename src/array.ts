@@ -20,15 +20,46 @@ import {
 } from "./chunk/indexing.js";
 import type { DimRange } from "./chunk/indexing.js";
 import { loadChunks } from "./chunk/loader.js";
-import type { ChunkTask } from "./chunk/loader.js";
+import type { ChunkTask, LoadedChunk } from "./chunk/loader.js";
+import { ByteLimiter } from "./chunk/limiter.js";
 
-/** Default concurrency for chunk loading. */
+/** Default concurrency (network-request cap) for chunk loading. */
 export const DEFAULT_CONCURRENCY = 50;
 
+/**
+ * Default ceiling on decoded chunk bytes held in flight during a single read.
+ * Acts as an adaptive throttle: with large (e.g. compressed WRF) chunks the
+ * effective parallelism drops automatically so a read can't balloon to
+ * `concurrency × chunkSize`. 256 MiB.
+ */
+export const DEFAULT_MAX_IN_FLIGHT_BYTES = 256 * 1024 * 1024;
+
+/**
+ * Default output-size threshold above which `get()` logs a one-line warning.
+ * 512 MiB. Set `largeReadWarningBytes: Infinity` to silence.
+ */
+export const DEFAULT_LARGE_READ_WARNING_BYTES = 512 * 1024 * 1024;
+
+/** Compressed chunks transiently hold input + output during decode (~2×). */
+const DECODE_PEAK_FACTOR = 2;
+
 export interface ReadOptions {
-  /** Max parallel chunk fetches. Default: 50. */
+  /**
+   * Max parallel chunk fetches (network-request cap). Default: 50. The actual
+   * decode parallelism may be lower when `maxInFlightBytes` binds first.
+   */
   concurrency?: number;
   memoryCache?: MemoryCache;
+  /**
+   * Ceiling on decoded chunk bytes held in flight, in bytes. Bounds peak memory
+   * regardless of `concurrency` or chunk size. Default: 256 MiB.
+   */
+  maxInFlightBytes?: number;
+  /**
+   * Warn (once per call, via `console.warn`) when the materialized output would
+   * exceed this many bytes. Default: 512 MiB. Use `Infinity` to disable.
+   */
+  largeReadWarningBytes?: number;
 }
 
 export type Slice = (number | [number, number] | null)[];
@@ -78,25 +109,113 @@ export class ZarrArray {
   }
 
   async get(selection?: Slice, options?: ReadOptions): Promise<TypedArray> {
+    return this.read(selection, options, null);
+  }
+
+  /**
+   * @internal
+   * Read sharing an externally-owned byte budget. Used by
+   * `ZarrGroup.readMultiple` so concurrent array reads bound their *combined*
+   * in-flight footprint instead of each allocating an independent ceiling.
+   */
+  async readWithLimiter(
+    selection: Slice | undefined,
+    options: ReadOptions | undefined,
+    limiter: ByteLimiter,
+  ): Promise<TypedArray> {
+    return this.read(selection, options, limiter);
+  }
+
+  private async read(
+    selection: Slice | undefined,
+    options: ReadOptions | undefined,
+    sharedLimiter: ByteLimiter | null,
+  ): Promise<TypedArray> {
     const concurrency = options?.concurrency ?? DEFAULT_CONCURRENCY;
     const memoryCache = options?.memoryCache ?? null;
+    const maxInFlightBytes =
+      options?.maxInFlightBytes ?? DEFAULT_MAX_IN_FLIGHT_BYTES;
+    const warnBytes =
+      options?.largeReadWarningBytes ?? DEFAULT_LARGE_READ_WARNING_BYTES;
+    const limiter = sharedLimiter ?? new ByteLimiter(maxInFlightBytes);
 
     if (selection !== undefined) {
-      return this.getSlice(selection, concurrency, memoryCache);
+      return this.getSlice(
+        selection,
+        concurrency,
+        memoryCache,
+        limiter,
+        warnBytes,
+      );
     }
 
-    return this.getFull(concurrency, memoryCache);
+    return this.getFull(concurrency, memoryCache, limiter, warnBytes);
+  }
+
+  /** Estimated peak bytes a single in-flight decoded chunk holds. */
+  private peakPerChunk(chunkByteSize: number): number {
+    // Compressed decode transiently holds compressed input + decoded output
+    // (~2×). Big-endian data is copied once more before the in-place byte swap
+    // (`toTypedChunk`), adding another full-chunk buffer (+1×).
+    const decodeFactor = this.codec ? DECODE_PEAK_FACTOR : 1;
+    const byteSwapFactor = isBigEndian(this.dtype) ? 1 : 0;
+    return chunkByteSize * (decodeFactor + byteSwapFactor);
+  }
+
+  /** Build a Ctor-typed view over chunk bytes, byte-swapping big-endian data. */
+  private toTypedChunk(
+    data: Uint8Array,
+    Ctor: ReturnType<typeof dtypeToTypedArrayCtor>,
+    byteSize: number,
+    bigEndian: boolean,
+  ): TypedArray {
+    let chunkBuf = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+    if (bigEndian) {
+      chunkBuf = Buffer.from(chunkBuf); // copy before in-place swap
+      byteSwap(chunkBuf, byteSize);
+    }
+    return new Ctor(
+      chunkBuf.buffer as ArrayBuffer,
+      chunkBuf.byteOffset,
+      chunkBuf.byteLength / byteSize,
+    );
+  }
+
+  /** Warn once per call when a read materializes more than `warnBytes`. */
+  private maybeWarnLargeRead(
+    outputBytes: number,
+    warnBytes: number,
+    full: boolean,
+  ): void {
+    if (!Number.isFinite(warnBytes) || outputBytes <= warnBytes) return;
+    const mb = (outputBytes / (1024 * 1024)).toFixed(0);
+    const what = full ? "Full-array read" : "Slice read";
+    console.warn(
+      `[zarr-node] ${what} of "${this.basePath || "/"}" allocates ~${mb} MiB ` +
+        `in a single TypedArray. Consider a narrower selection, or set ` +
+        `largeReadWarningBytes: Infinity on the read to silence this warning.`,
+    );
   }
 
   private async getFull(
     concurrency: number,
     memoryCache: MemoryCache | null,
+    limiter: ByteLimiter,
+    warnBytes: number,
   ): Promise<TypedArray> {
     const ndim = this.shape.length;
     const ranges = computeChunkRanges(this.shape, this.chunks);
     const byteSize = dtypeByteSize(this.dtype);
     const chunkElements = this.chunks.reduce((a, b) => a * b, 1);
     const chunkByteSize = chunkElements * byteSize;
+
+    // Allocate output up front so chunks can be copied in on arrival.
+    const totalElements = this.shape.reduce((a, b) => a * b, 1);
+    this.maybeWarnLargeRead(totalElements * byteSize, warnBytes, true);
+    const Ctor = dtypeToTypedArrayCtor(this.dtype);
+    const output = new Ctor(totalElements);
+    const bigEndian = isBigEndian(this.dtype);
+    const outputStrides = cStrides(this.shape);
 
     // Build chunk tasks
     const tasks: ChunkTask[] = [];
@@ -107,66 +226,49 @@ export class ZarrArray {
       tasks.push({ key, chunkCoord: coord });
     }
 
-    // Load all chunks
-    const loaded = await loadChunks(
+    // Stream chunks into the output as they decode; buffers drop right after.
+    await loadChunks(
       this.store,
       this.codec,
       tasks,
       this.fillValue,
       chunkByteSize,
-      concurrency,
-      memoryCache,
+      {
+        concurrency,
+        memoryCache,
+        limiter,
+        peakPerChunk: this.peakPerChunk(chunkByteSize),
+      },
+      (chunk: LoadedChunk) => {
+        const chunkTyped = this.toTypedChunk(
+          chunk.data,
+          Ctor,
+          byteSize,
+          bigEndian,
+        );
+
+        // Compute actual chunk size (edge chunks may be smaller than chunk shape)
+        const actualChunkShape = this.chunks.map((c, d) => {
+          const start = chunk.chunkCoord[d] * c;
+          return Math.min(c, this.shape[d] - start);
+        });
+
+        const chunkDataStrides =
+          this.order === "F"
+            ? fStrides(this.chunks as number[])
+            : cStrides(this.chunks as number[]);
+
+        this.copyChunkToOutput(
+          chunkTyped,
+          output,
+          chunk.chunkCoord,
+          actualChunkShape,
+          chunkDataStrides,
+          outputStrides,
+          ndim,
+        );
+      },
     );
-
-    // Assemble into output
-    const totalElements = this.shape.reduce((a, b) => a * b, 1);
-    const Ctor = dtypeToTypedArrayCtor(this.dtype);
-    const output = new Ctor(totalElements);
-    const bigEndian = isBigEndian(this.dtype);
-
-    const outputStrides = cStrides(this.shape);
-
-    for (const chunk of loaded) {
-      // Byte-swap if big-endian
-      let chunkBuf = Buffer.from(
-        chunk.data.buffer,
-        chunk.data.byteOffset,
-        chunk.data.byteLength,
-      );
-      if (bigEndian) {
-        chunkBuf = Buffer.from(chunkBuf); // copy before in-place swap
-        byteSwap(chunkBuf, byteSize);
-      }
-
-      const chunkTyped = new Ctor(
-        chunkBuf.buffer as ArrayBuffer,
-        chunkBuf.byteOffset,
-        chunkBuf.byteLength / byteSize,
-      );
-
-      // Compute actual chunk size (edge chunks may be smaller than chunk shape)
-      const actualChunkShape = this.chunks.map((c, d) => {
-        const start = chunk.chunkCoord[d] * c;
-        return Math.min(c, this.shape[d] - start);
-      });
-
-      // Determine strides for reading from chunk data
-      const chunkDataStrides =
-        this.order === "F"
-          ? fStrides(this.chunks as number[])
-          : cStrides(this.chunks as number[]);
-
-      // Copy elements from chunk to output
-      this.copyChunkToOutput(
-        chunkTyped,
-        output,
-        chunk.chunkCoord,
-        actualChunkShape,
-        chunkDataStrides,
-        outputStrides,
-        ndim,
-      );
-    }
 
     return output;
   }
@@ -210,6 +312,8 @@ export class ZarrArray {
     selection: Slice,
     concurrency: number,
     memoryCache: MemoryCache | null,
+    limiter: ByteLimiter,
+    warnBytes: number,
   ): Promise<TypedArray> {
     const ndim = this.shape.length;
     const ranges = normalizeSelection(selection, this.shape);
@@ -244,70 +348,65 @@ export class ZarrArray {
       tasks.push(task);
     }
 
-    const loaded = await loadChunks(
-      this.store,
-      this.codec,
-      tasks,
-      this.fillValue,
-      chunkByteSize,
-      concurrency,
-      memoryCache,
-    );
-
-    // Compute output shape
+    // Allocate output up front so chunks can be copied in on arrival.
     const outputShape = ranges.map((r) => r.stop - r.start);
     const totalElements = outputShape.reduce((a, b) => a * b, 1);
+    this.maybeWarnLargeRead(totalElements * byteSize, warnBytes, false);
     const Ctor = dtypeToTypedArrayCtor(this.dtype);
     const output = new Ctor(totalElements);
     const bigEndian = isBigEndian(this.dtype);
     const outputStrides = cStrides(outputShape);
 
-    for (const chunk of loaded) {
-      let chunkBuf = Buffer.from(
-        chunk.data.buffer,
-        chunk.data.byteOffset,
-        chunk.data.byteLength,
-      );
-      if (bigEndian) {
-        chunkBuf = Buffer.from(chunkBuf);
-        byteSwap(chunkBuf, byteSize);
-      }
-
-      const chunkTyped = new Ctor(
-        chunkBuf.buffer as ArrayBuffer,
-        chunkBuf.byteOffset,
-        chunkBuf.byteLength / byteSize,
-      );
-
-      if (chunk.partial) {
-        // Partial byte-range read: data is already the contiguous overlap elements.
-        // Copy directly into the correct output position.
-        this.copyPartialToOutput(
-          chunkTyped,
-          output,
-          chunk.chunkCoord,
-          ranges,
-          outputStrides,
-          ndim,
+    await loadChunks(
+      this.store,
+      this.codec,
+      tasks,
+      this.fillValue,
+      chunkByteSize,
+      {
+        concurrency,
+        memoryCache,
+        limiter,
+        peakPerChunk: this.peakPerChunk(chunkByteSize),
+      },
+      (chunk: LoadedChunk) => {
+        const chunkTyped = this.toTypedChunk(
+          chunk.data,
+          Ctor,
+          byteSize,
+          bigEndian,
         );
-      } else {
-        const chunkDataStrides =
-          this.order === "F"
-            ? fStrides(this.chunks as number[])
-            : cStrides(this.chunks as number[]);
 
-        // Copy relevant elements from this chunk to output
-        this.copySliceChunkToOutput(
-          chunkTyped,
-          output,
-          chunk.chunkCoord,
-          ranges,
-          chunkDataStrides,
-          outputStrides,
-          ndim,
-        );
-      }
-    }
+        if (chunk.partial) {
+          // Partial byte-range read: data is already the contiguous overlap
+          // elements. Copy directly into the correct output position.
+          this.copyPartialToOutput(
+            chunkTyped,
+            output,
+            chunk.chunkCoord,
+            ranges,
+            outputStrides,
+            ndim,
+          );
+        } else {
+          const chunkDataStrides =
+            this.order === "F"
+              ? fStrides(this.chunks as number[])
+              : cStrides(this.chunks as number[]);
+
+          // Copy relevant elements from this chunk to output
+          this.copySliceChunkToOutput(
+            chunkTyped,
+            output,
+            chunk.chunkCoord,
+            ranges,
+            chunkDataStrides,
+            outputStrides,
+            ndim,
+          );
+        }
+      },
+    );
 
     return output;
   }
