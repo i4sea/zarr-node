@@ -142,9 +142,9 @@ const series = await array.get([null, latIdx, lonIdx], {
 compressed arrays at once stays bounded by a single ceiling rather than
 `arrays × concurrency × chunkSize`.
 
-A full-array read (`get()` with no selection) that would allocate more than
-`largeReadWarningBytes` (512 MiB) logs a one-line `console.warn`. Set it to
-`Infinity` to silence.
+Any read whose materialized output would exceed `largeReadWarningBytes`
+(512 MiB) — whether a full-array `get()` or a large slice — logs a one-line
+`console.warn`. Set it to `Infinity` to silence.
 
 ### Caching
 

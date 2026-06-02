@@ -24,6 +24,9 @@ export class ByteLimiter {
   /** Reserve `cost` bytes, waiting (FIFO) until the budget allows. */
   async acquire(cost: number): Promise<void> {
     const c = this.clamp(cost);
+    // Zero/non-positive cost reserves nothing — return without queuing so it can
+    // never get stuck behind an existing waiter.
+    if (c === 0) return;
     // Fast path: no one waiting and budget available -> reserve immediately.
     if (this.waiters.length === 0 && this.available >= c) {
       this.available -= c;

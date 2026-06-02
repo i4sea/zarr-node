@@ -94,6 +94,39 @@ describe("loadChunks — bounded in-flight memory", () => {
     expect(delivered).toHaveLength(20);
   });
 
+  it("fills only the requested slice when getRange misses (stays in budget)", async () => {
+    let fullGets = 0;
+    const store: Store = {
+      async get() {
+        fullGets++;
+        return new Uint8Array(4096); // a full chunk — must NOT be fetched
+      },
+      async getRange() {
+        return null; // missing chunk
+      },
+      async has() {
+        return true;
+      },
+      async *list() {},
+    };
+
+    const delivered: LoadedChunk[] = [];
+    await loadChunks(
+      store,
+      null, // uncompressed -> byte-range path is active
+      [{ key: "0", chunkCoord: [0], byteRange: { offset: 0, length: 16 } }],
+      null,
+      4096,
+      { concurrency: 4, limiter: new ByteLimiter(1024), peakPerChunk: 4096 },
+      (c) => delivered.push(c),
+    );
+
+    expect(fullGets).toBe(0); // no full-chunk fetch under the small reservation
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0].partial).toBe(true);
+    expect(delivered[0].data.byteLength).toBe(16);
+  });
+
   it("lets a single oversized chunk proceed (no deadlock)", async () => {
     const { store, maxConcurrent } = probingStore();
     const limiter = new ByteLimiter(10);

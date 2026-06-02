@@ -154,7 +154,12 @@ export class ZarrArray {
 
   /** Estimated peak bytes a single in-flight decoded chunk holds. */
   private peakPerChunk(chunkByteSize: number): number {
-    return chunkByteSize * (this.codec ? DECODE_PEAK_FACTOR : 1);
+    // Compressed decode transiently holds compressed input + decoded output
+    // (~2×). Big-endian data is copied once more before the in-place byte swap
+    // (`toTypedChunk`), adding another full-chunk buffer (+1×).
+    const decodeFactor = this.codec ? DECODE_PEAK_FACTOR : 1;
+    const byteSwapFactor = isBigEndian(this.dtype) ? 1 : 0;
+    return chunkByteSize * (decodeFactor + byteSwapFactor);
   }
 
   /** Build a Ctor-typed view over chunk bytes, byte-swapping big-endian data. */

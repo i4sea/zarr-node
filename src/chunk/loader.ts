@@ -87,7 +87,16 @@ export async function loadChunks(
           });
           return;
         }
-        // Fall through to full fetch if range failed.
+        // getRange returning null means the chunk is missing. Fill only the
+        // requested slice — falling through to a full fetch/fill would allocate
+        // a whole chunk under the smaller byte-range reservation, breaking the
+        // maxInFlightBytes bound.
+        onChunk({
+          chunkCoord: task.chunkCoord,
+          data: new Uint8Array(task.byteRange.length),
+          partial: true,
+        });
+        return;
       }
 
       const raw = await store.get(task.key);
