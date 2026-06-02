@@ -15,7 +15,11 @@ import { codecRegistry } from "./codec/codec.js";
 export { ZarrArray } from "./array.js";
 export { ZarrGroup } from "./group.js";
 export type { ReadOptions, Slice } from "./array.js";
-export { DEFAULT_CONCURRENCY } from "./array.js";
+export {
+  DEFAULT_CONCURRENCY,
+  DEFAULT_MAX_IN_FLIGHT_BYTES,
+  DEFAULT_LARGE_READ_WARNING_BYTES,
+} from "./array.js";
 export type { TypedArray, TypedArrayConstructor } from "./dtype.js";
 export type {
   Store,

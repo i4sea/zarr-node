@@ -2,8 +2,9 @@ import type { Store } from "./store/store.js";
 import type { Zattrs } from "./metadata/types.js";
 import type { TypedArray } from "./dtype.js";
 import type { ConsolidatedMetadata } from "./metadata/consolidated.js";
-import { ZarrArray } from "./array.js";
+import { ZarrArray, DEFAULT_MAX_IN_FLIGHT_BYTES } from "./array.js";
 import type { Slice, ReadOptions } from "./array.js";
+import { ByteLimiter } from "./chunk/limiter.js";
 import {
   parseZarrayMeta,
   parseZgroupMeta,
@@ -81,7 +82,11 @@ export class ZarrGroup {
   }
 
   /**
-   * Read multiple arrays with the same selection through a shared concurrency pool.
+   * Read multiple arrays with the same selection, bounding their *combined*
+   * in-flight memory through one shared byte budget (`maxInFlightBytes`). This
+   * prevents the `arrays × concurrency × chunkSize` blow-up of reading many
+   * compressed arrays at once: the total live decoded footprint stays near the
+   * single budget instead of multiplying per array.
    * Invalid array names are silently skipped (partial failure handling).
    */
   async readMultiple(
@@ -102,9 +107,14 @@ export class ZarrGroup {
       }
     }
 
-    // Read all arrays with shared concurrency
+    // One byte budget shared across every array read.
+    const limiter = new ByteLimiter(
+      options?.maxInFlightBytes ?? DEFAULT_MAX_IN_FLIGHT_BYTES,
+    );
+
+    // Read all arrays through the shared budget.
     const promises = arrays.map(async ({ name, array }) => {
-      const data = await array.get(selection, options);
+      const data = await array.readWithLimiter(selection, options, limiter);
       return { name, data };
     });
 

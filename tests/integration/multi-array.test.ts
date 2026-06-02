@@ -73,6 +73,74 @@ describe("readMultiple", () => {
     expect(maxConcurrent).toBeLessThanOrEqual(2);
   });
 
+  // Shared byte budget bounds COMBINED in-flight memory across arrays.
+  it("bounds combined in-flight chunks across arrays via shared maxInFlightBytes", async () => {
+    const enc = new TextEncoder();
+    const zgroup = enc.encode(JSON.stringify({ zarr_format: 2 }));
+    const zarray = (shape: number) =>
+      enc.encode(
+        JSON.stringify({
+          shape: [shape],
+          chunks: [1],
+          dtype: "<i4",
+          fill_value: 0,
+          order: "C",
+          filters: null,
+          dimension_separator: ".",
+          compressor: null,
+          zarr_format: 2,
+        }),
+      );
+    const chunk = (v: number) => new Uint8Array(new Int32Array([v]).buffer);
+
+    // Two arrays of 6 single-element chunks each.
+    const data = new Map<string, Uint8Array>([
+      [".zgroup", zgroup],
+      ["a/.zarray", zarray(6)],
+      ["b/.zarray", zarray(6)],
+    ]);
+    for (let i = 0; i < 6; i++) {
+      data.set(`a/${i}`, chunk(i));
+      data.set(`b/${i}`, chunk(100 + i));
+    }
+
+    let current = 0;
+    let max = 0;
+    const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+    const store: Store = {
+      async get(key: string) {
+        const val = data.get(key) ?? null;
+        // Only count actual chunk fetches, not metadata.
+        const isChunk = /\/\d+$/.test(key);
+        if (isChunk) {
+          current++;
+          if (current > max) max = current;
+        }
+        await delay(5);
+        if (isChunk) current--;
+        return val;
+      },
+      async has(key: string) {
+        return data.has(key);
+      },
+      async *list() {},
+    };
+
+    const root = await openGroup(store);
+    // peakPerChunk = 4 bytes (uncompressed). Budget of 4 admits exactly one
+    // chunk at a time ACROSS both arrays — if the budget weren't shared, each
+    // array would run independently and max would be >= 2.
+    const results = await root.readMultiple(["a", "b"], undefined, {
+      maxInFlightBytes: 4,
+    });
+
+    expect(max).toBe(1);
+    expect(Array.from(results.get("a")!)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(Array.from(results.get("b")!)).toEqual([
+      100, 101, 102, 103, 104, 105,
+    ]);
+  });
+
   // T017b: Partial failure — one invalid array name
   it("returns error for invalid array and results for valid arrays", async () => {
     const store = new FileSystemStore({ path: join(FIXTURES, "multi_array") });

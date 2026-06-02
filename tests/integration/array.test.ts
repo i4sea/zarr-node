@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
 import { FileSystemStore } from "../../src/store/filesystem.js";
@@ -292,6 +292,77 @@ describe("Slice reads", () => {
     expect(slice.length).toBe(10);
     for (let i = 0; i < 10; i++) {
       expect(slice[i]).toBeCloseTo(expected.data[i], 5);
+    }
+  });
+});
+
+describe("Bounded-memory read options", () => {
+  it("produces identical results under a tiny in-flight byte budget (compressed)", async () => {
+    const expected = await loadExpected("compressed_gzip");
+    const store = new FileSystemStore({
+      path: join(FIXTURES, "compressed_gzip"),
+    });
+    const arr = await openArray(store);
+
+    // A point over the full first axis on a compressed array — the exact
+    // pattern from the OOM report — forced through a 1-byte budget so only one
+    // chunk is ever decoded at a time.
+    const slice = await arr.get([null, 0], { maxInFlightBytes: 1 });
+    expect(slice.length).toBe(50);
+
+    // shape [50, 100], C-order: element (r, 0) is at r * 100.
+    for (let r = 0; r < 50; r++) {
+      expect(slice[r]).toBeCloseTo(expected.data[r * 100], 10);
+    }
+  });
+
+  it("matches the default read regardless of maxInFlightBytes", async () => {
+    const store = new FileSystemStore({
+      path: join(FIXTURES, "compressed_gzip"),
+    });
+    const arr = await openArray(store);
+
+    const def = await arr.get([
+      [0, 30],
+      [0, 40],
+    ]);
+    const bounded = await arr.get(
+      [
+        [0, 30],
+        [0, 40],
+      ],
+      { maxInFlightBytes: 1 },
+    );
+
+    expect(bounded.length).toBe(def.length);
+    for (let i = 0; i < def.length; i++) {
+      expect(bounded[i]).toBe(def[i]);
+    }
+  });
+
+  it("warns on a read above largeReadWarningBytes and stays silent otherwise", async () => {
+    const store = new FileSystemStore({
+      path: join(FIXTURES, "compressed_gzip"),
+    });
+    const arr = await openArray(store);
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // full read is 50*100*8 = 40000 bytes; threshold below that -> warns
+      await arr.get(undefined, { largeReadWarningBytes: 1000 });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain("[zarr-node]");
+
+      warn.mockClear();
+      // Default threshold (512 MiB) is far above 40000 bytes -> no warning.
+      await arr.get();
+      expect(warn).not.toHaveBeenCalled();
+
+      // Explicitly disabled.
+      await arr.get(undefined, { largeReadWarningBytes: Infinity });
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
     }
   });
 });
