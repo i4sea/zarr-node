@@ -140,7 +140,13 @@ export class ZarrArray {
     const limiter = sharedLimiter ?? new ByteLimiter(maxInFlightBytes);
 
     if (selection !== undefined) {
-      return this.getSlice(selection, concurrency, memoryCache, limiter, warnBytes);
+      return this.getSlice(
+        selection,
+        concurrency,
+        memoryCache,
+        limiter,
+        warnBytes,
+      );
     }
 
     return this.getFull(concurrency, memoryCache, limiter, warnBytes);
@@ -178,9 +184,7 @@ export class ZarrArray {
   ): void {
     if (!Number.isFinite(warnBytes) || outputBytes <= warnBytes) return;
     const mb = (outputBytes / (1024 * 1024)).toFixed(0);
-    const what = full
-      ? "Full-array read"
-      : "Slice read";
+    const what = full ? "Full-array read" : "Slice read";
     console.warn(
       `[zarr-node] ${what} of "${this.basePath || "/"}" allocates ~${mb} MiB ` +
         `in a single TypedArray. Consider a narrower selection, or set ` +

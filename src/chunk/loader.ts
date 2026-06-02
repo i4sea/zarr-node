@@ -80,7 +80,11 @@ export async function loadChunks(
         );
         if (partial !== null) {
           // Don't cache partial reads — cache expects full decoded chunks.
-          onChunk({ chunkCoord: task.chunkCoord, data: partial, partial: true });
+          onChunk({
+            chunkCoord: task.chunkCoord,
+            data: partial,
+            partial: true,
+          });
           return;
         }
         // Fall through to full fetch if range failed.
