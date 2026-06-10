@@ -58,7 +58,7 @@ specs/005-production-hardening/
 
 ```text
 src/
-├── index.ts                  # MODIFY: open/openGroup/openArray accept OpenOptions (metadataCache, storeId, observability)
+├── index.ts                  # MODIFY: open/openGroup/openArray accept OpenOptions; ALL root metadata reads (.zarray/.zgroup/.zattrs/.zmetadata — direct store.get today) go through the read-through helper (research.md D2)
 ├── array.ts                  # MODIFY: ReadOptions gains observability + strict; thread to loader
 ├── group.ts                  # MODIFY: carry metadataCache/storeId/observability; getMeta reads through Cache
 ├── errors.ts                 # MODIFY: add MissingChunkError
@@ -72,7 +72,7 @@ src/
 │   ├── loader.ts             # MODIFY: missing-chunk hook + strict; memory hit/miss + decode + in-flight hooks
 │   └── limiter.ts            # MODIFY: optional onInFlightBytes callback hook
 ├── store/
-│   ├── identity.ts           # NEW: deriveStoreId(store) -> string | null (deterministic-or-null)
+│   ├── identity.ts           # NEW: deriveStoreId(store) -> string | null (refactored from cached-store.ts:107-120; deterministic-or-null)
 │   ├── retry.ts              # NEW: shared retry policy (retryable set, full-jitter backoff, config)
 │   ├── http.ts               # MODIFY: use shared retry, jitter, expanded codes, configurable maxRetries; fire hooks
 │   ├── s3.ts                 # MODIFY: explicit timeout, shared retry, jitter, expanded codes, configurable; fire hooks

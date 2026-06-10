@@ -35,3 +35,20 @@ export interface ObservabilityHooks {
 7. `onMissingChunk` fires with the missing key (both full-fetch and byte-range miss paths).
 8. **Isolation**: a hook that throws does not abort or corrupt the read — the value is still returned (caught via `safeInvoke`).
 9. **Zero-overhead**: with no hooks registered, no hook-related allocation or dispatch occurs; a benchmark read is statistically unchanged from baseline (SC-004).
+
+## Call-site pattern (required for #8 + #9 to hold together)
+
+Every emission site MUST guard on hook existence **before** constructing the payload; `safeInvoke` is applied only inside the guard:
+
+```ts
+// ✅ correct — zero allocation/dispatch when the hook is absent
+if (hooks?.onChunkDecoded) {
+  safeInvoke(hooks.onChunkDecoded, { bytes, codec, decodeMs });
+}
+
+// ❌ forbidden — allocates the payload object even when no hook is registered,
+// breaking SC-004 in the per-chunk hot loop
+safeInvoke(hooks?.onChunkDecoded, { bytes, codec, decodeMs });
+```
+
+`safeInvoke` provides throw-isolation (#8) only; it is not the dispatch guard (#9).

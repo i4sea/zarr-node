@@ -14,9 +14,14 @@ All four spec-level unknowns were resolved during `/speckit.clarify` (see spec.m
 
 ## D2. Wiring the metadata cache through the open path (FR-007, FR-008)
 
-**Decision**: Introduce an `OpenOptions { metadataCache?: Cache; storeId?: string; observability?: ObservabilityHooks }` accepted by `open`/`openGroup`/`openArray`. `ZarrGroup` carries `metadataCache`, `storeId`, and `observability` so child `getMeta`/`getArray`/`getGroup` reads go through the cache. Metadata cache key = `${storeId}:${key}`. Cache read-through order on the metadata path: shared `Cache` → store fetch → populate cache (no TTL, since datasets are immutable per path).
+**Decision**: Introduce an `OpenOptions { metadataCache?: Cache; storeId?: string; observability?: ObservabilityHooks }` accepted by `open`/`openGroup`/`openArray`. Metadata reads have **two seams**, and both must implement read-through:
 
-**Rationale**: The open functions and `ZarrGroup.getMeta` are the single choke points for `.zmetadata`/`.zarray`/`.zattrs`/`.zgroup` reads. Threading one optional options bag is minimal and backward-compatible (omitted = today's behavior, FR-002/FR-010). Key scoping by store identity prevents cross-dataset collisions (FR-008) and is also correct across pods because two pods opening the same `s3://bucket/path` derive the same id.
+1. **Root reads inside the open path** (`src/index.ts`): `open`/`openGroup`/`openArray` and their helpers read `.zarray`/`.zgroup`/`.zattrs` — and `.zmetadata` via `loadConsolidatedMetadata` — with **direct `store.get(...)` calls** that do NOT go through `ZarrGroup.getMeta`. A shared read-through helper (e.g. `readMeta(store, key, opts)` in `src/index.ts` or a small module) wraps every one of these call sites.
+2. **Child reads in `ZarrGroup`** (`src/group.ts:163` `getMeta`, plus `loadAttrs`): `ZarrGroup` carries `metadataCache`, `storeId`, and `observability` (propagated from `OpenOptions` at construction) so `getArray`/`getGroup`/child metadata reads go through the same helper.
+
+Metadata cache key = `${storeId}:${key}`. Cache read-through order on the metadata path: shared `Cache` → store fetch → populate cache (no TTL, since datasets are immutable per path).
+
+**Rationale**: `ZarrGroup.getMeta` only covers **child** metadata; the first `.zmetadata`/`.zgroup`/`.zarray` read of any open happens in `src/index.ts:62-191` outside it. Without read-through at that seam, the root metadata is fetched from the store on every open and **SC-002 (100% of post-first metadata reads served from cache) fails**. Threading one optional options bag is minimal and backward-compatible (omitted = today's behavior, FR-002/FR-010). Key scoping by store identity prevents cross-dataset collisions (FR-008) and is also correct across pods because two pods opening the same `s3://bucket/path` derive the same id.
 
 **Alternatives considered**:
 - *Wrap the `Store` in a metadata-caching decorator (like `CachedStore`).* Rejected: `CachedStore` deliberately excludes metadata keys, and a decorator can't distinguish "open-time metadata read" from arbitrary `get`; the open path is the precise seam.
@@ -24,7 +29,11 @@ All four spec-level unknowns were resolved during `/speckit.clarify` (see spec.m
 
 ## D3. Store identity: deterministic-or-null (FR-008a)
 
-**Decision**: Extract `deriveStoreId(store): string | null` into `src/store/identity.ts`. Return a stable id for recognized stores (`s3://bucket/prefix`, HTTP base URL) and **`null`** when identity cannot be derived deterministically (today's `store-${Date.now()}` fallback). When a `metadataCache` is supplied and both `options.storeId` is absent and `deriveStoreId` returns `null`, throw at construction/open time. The existing `CachedStore` keeps a non-shared, per-process fallback (disk cache is per-pod, so a per-process id is acceptable there) but reuses the same deterministic derivation.
+**Decision**: **Refactor** the existing `deriveStoreId` (today in `src/cache/cached-store.ts:107-120`) into `src/store/identity.ts` as `deriveStoreId(store): string | null` — this is a behavior change, not a pure extraction. Return a stable id for recognized stores (`s3://bucket/prefix`, HTTP base URL) and **`null`** when identity cannot be derived deterministically (replacing today's `store-${Date.now()}` fabrication). When a `metadataCache` is supplied and both `options.storeId` is absent and `deriveStoreId` returns `null`, throw at construction/open time. The existing `CachedStore` keeps a non-shared, per-process fallback (disk cache is per-pod, so a per-process id is acceptable there) but reuses the same deterministic derivation.
+
+**Detection fields (verified against the real stores)**: `S3Store` exposes `bucket`/`prefix`; `HTTPStore` exposes `baseUrl` (`src/store/http.ts:10` — private in TS but present at runtime, which is what the duck-typed check reads). So S3 and HTTP identities derive automatically and never hit the FR-008a fail-fast; only unrecognized stores (filesystem, in-memory, custom) require an explicit `storeId`.
+
+**Operational note (cache-bust)**: changing the `CachedStore` fallback id (from `store-${Date.now()}` to the new per-process fallback) changes the on-disk cache identity for unrecognized stores, invalidating those disk caches on deploy. The current fallback is already per-process non-deterministic (a fresh `Date.now()` per construction), so those caches were never reusable across restarts — but the change MUST still be recorded in the CHANGELOG (see D9). S3/HTTP-backed disk caches are unaffected (same deterministic ids).
 
 **Rationale**: A non-deterministic id silently breaks cross-pod cache sharing (every pod writes different keys → permanent miss) — exactly the silent-failure class this hardening targets. Failing fast forces the consumer to pass an explicit `storeId`. Disk cache is local to a pod, so its non-deterministic fallback is harmless and need not break.
 
@@ -34,7 +43,15 @@ All four spec-level unknowns were resolved during `/speckit.clarify` (see spec.m
 
 ## D4. Observability mechanism and threading (FR-012, FR-012a, FR-013–FR-018)
 
-**Decision**: `ObservabilityHooks` is a plain object of optional typed callbacks in `src/observability.ts`. A `safeInvoke(fn, arg)` helper wraps every call in try/catch so a throwing handler cannot break a read (edge case). Registration is per-instance: the same hooks object is passed to store options, `CacheOptions`, and `OpenOptions`/`ReadOptions`; each layer fires the events it owns:
+**Decision**: `ObservabilityHooks` is a plain object of optional typed callbacks in `src/observability.ts`. A `safeInvoke(fn, arg)` helper wraps the call in try/catch so a throwing handler cannot break a read (edge case). **Mandatory call-site pattern** — the existence guard comes FIRST, and the payload object is only constructed inside it:
+
+```ts
+if (hooks?.onChunkDecoded) {
+  safeInvoke(hooks.onChunkDecoded, { bytes, codec, decodeMs });
+}
+```
+
+Calling `safeInvoke(hooks?.onChunkDecoded, {...})` unconditionally is forbidden: it allocates the payload before checking whether the hook exists, which violates the SC-004 zero-overhead guarantee in the per-chunk hot loop (~128 concurrent chunks). `safeInvoke` exists only for throw-isolation, not as the dispatch guard. Registration is per-instance: the same hooks object is passed to store options, `CacheOptions`, and `OpenOptions`/`ReadOptions`; each layer fires the events it owns:
 - Stores (`http.ts`/`s3.ts`): `onStoreFetch`, `onRetry`.
 - `CachedStore`: disk `onCacheHit`/`onCacheMiss` (tier `"disk"`).
 - Metadata open path: shared `onCacheHit`/`onCacheMiss` (tier `"shared"`).
@@ -79,6 +96,6 @@ All four spec-level unknowns were resolved during `/speckit.clarify` (see spec.m
 
 ## D9. Versioning & changelog
 
-**Decision**: Bump `0.4.0` → `0.5.0` (minor). Add a changeset and CHANGELOG entry covering: new `Cache` interface + `InMemoryCache`, `@i4sea/zarr-node/redis` adapter, observability hooks, expanded retry/jitter/timeout config, missing-chunk hook + strict mode, and the unbounded disk-cache warning (noting it is a new warning, not a behavior break).
+**Decision**: Bump `0.4.0` → `0.5.0` (minor). Add a changeset and CHANGELOG entry covering: new `Cache` interface + `InMemoryCache`, `@i4sea/zarr-node/redis` adapter, observability hooks, expanded retry/jitter/timeout config, missing-chunk hook + strict mode, the unbounded disk-cache warning (noting it is a new warning, not a behavior break), and the **disk-cache identity change for unrecognized stores** (D3 cache-bust note: fallback id is no longer `store-${Date.now()}`; existing disk caches under fallback ids are invalidated on deploy — they were already non-reusable across restarts).
 
 **Rationale**: All changes are additive or pre-1.0-acceptable behavior refinements (constitution VI). Minor bump signals new capabilities.

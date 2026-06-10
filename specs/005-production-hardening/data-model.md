@@ -26,14 +26,14 @@ Derived identifier used to scope cache keys.
 
 | Rule | Behavior |
 |------|----------|
-| S3 store | `s3://${bucket}/${prefix}` |
-| HTTP store | base URL |
+| S3 store | `s3://${bucket}/${prefix}` (duck-typed on `bucket`/`prefix`) |
+| HTTP store | base URL (duck-typed on `baseUrl` — the real `HTTPStore` field, src/store/http.ts:10) |
 | Unknown store | `null` (deterministic-or-null; replaces `store-${Date.now()}` fabrication) |
 
 **Rules**:
-- `deriveStoreId(store): string \| null`.
-- When `metadataCache` is set, `storeId` absent, and `deriveStoreId` returns `null` ⇒ throw at open/construction (FR-008a).
-- `CachedStore` (disk, per-pod) may still use a per-process fallback id when none derivable.
+- `deriveStoreId(store): string \| null` — refactor of the existing helper in src/cache/cached-store.ts:107-120, not a new function.
+- When `metadataCache` is set, `storeId` absent, and `deriveStoreId` returns `null` ⇒ throw at open/construction (FR-008a). S3/HTTP stores derive automatically and never hit this.
+- `CachedStore` (disk, per-pod) may still use a per-process fallback id when none derivable. Changing the fallback alters the on-disk cache identity for unrecognized stores ⇒ CHANGELOG note (research.md D3/D9).
 
 ## ObservabilityHooks
 
@@ -50,7 +50,7 @@ Plain object of optional callbacks, registered per instance (FR-012, FR-012a). A
 | `onMissingChunk?` | `{ key: string }` | loader |
 
 **Rules**:
-- Absent hook ⇒ no allocation, no dispatch (SC-004).
+- Absent hook ⇒ no allocation, no dispatch (SC-004). Emission sites MUST guard on hook existence before constructing the payload — `if (hooks?.onX) safeInvoke(hooks.onX, payload)`; payload built only inside the guard (see contracts/observability.md → Call-site pattern).
 - Tier discriminates the three cache layers (FR-013).
 
 ## RetryConfig / RetryPolicy

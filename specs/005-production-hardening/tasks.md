@@ -33,7 +33,7 @@ Single-library layout: `src/`, `tests/` at repository root (per plan.md).
 **⚠️ CRITICAL**: Complete before US2–US5. (US1 does not depend on this phase.)
 
 - [ ] T002 [P] Write failing unit test for `safeInvoke` (a throwing handler is swallowed and never propagates) in tests/unit/observability.test.ts
-- [ ] T003 Create src/observability.ts exporting `CacheTier`, the `ObservabilityHooks` interface (per contracts/observability.md), and a `safeInvoke(fn, arg)` helper; re-export both types from src/index.ts
+- [ ] T003 Create src/observability.ts exporting `CacheTier`, the `ObservabilityHooks` interface (per contracts/observability.md), and a `safeInvoke(fn, arg)` helper for throw-isolation only — every emission site guards `if (hooks?.onX)` BEFORE constructing the payload (contracts/observability.md → Call-site pattern); re-export both types from src/index.ts
 
 **Checkpoint**: `ObservabilityHooks` type available; user stories can begin.
 
@@ -69,15 +69,15 @@ Single-library layout: `src/`, `tests/` at repository root (per plan.md).
 
 - [ ] T008 [P] [US2] Shared `Cache` contract suite (get-miss→null, set→get round-trip binary-safe, TTL expiry, optional `has`) in tests/contract/cache.contract.ts
 - [ ] T009 [P] [US2] Unit test: `InMemoryCache` adapter behavior + `${storeId}:${key}` scoping (no cross-dataset collision) in tests/unit/cache-interface.test.ts
-- [ ] T010 [P] [US2] Integration test: metadata cache hit avoids second store fetch on repeated `open`; no-cache passthrough behaves as today; `metadataCache` + non-deterministic store identity without `storeId` throws at open (FR-008a) in tests/integration/metadata-cache.test.ts
+- [ ] T010 [P] [US2] Integration test: metadata cache hit avoids second store fetch on repeated `open` — assert ZERO store reads on the second open, covering root `.zarray`/`.zgroup`/`.zattrs`/`.zmetadata` (the direct reads inside `open*`, SC-002) AND child metadata via `ZarrGroup`; no-cache passthrough behaves as today; `metadataCache` + non-deterministic store identity without `storeId` throws at open (FR-008a) in tests/integration/metadata-cache.test.ts
 - [ ] T011 [P] [US2] Integration test: `RedisCache` satisfies the cache contract against an `ioredis` instance, and importing `./redis` errors clearly when `ioredis` is absent (guard/skip when not installed) in tests/integration/redis-cache.test.ts
 
 ### Implementation for User Story 2
 
 - [ ] T012 [P] [US2] Define the async `Cache` interface and a `scopeKey(storeId, key)` helper in src/cache/cache.ts (per contracts/cache.md)
 - [ ] T013 [US2] Implement `InMemoryCache implements Cache` reusing the existing `MemoryCache` byte-LRU, honoring `ttlMs` via stored expiry timestamps, in src/cache/memory.ts
-- [ ] T014 [US2] Extract store-identity derivation into src/store/identity.ts as `deriveStoreId(store): string | null` (deterministic-or-null, replacing the `store-${Date.now()}` fabrication); update src/cache/cached-store.ts to consume it (keeping a per-process fallback id for the local disk cache)
-- [ ] T015 [US2] Add `OpenOptions { metadataCache?, storeId?, observability? }` and thread it through `open`/`openGroup`/`openArray`: read-through (`cache.get` → `store.get` → `cache.set` no-TTL), shared-tier `onCacheHit`/`onCacheMiss`, error/unavailable cache falls back to store (FR-011), and fail-fast when `metadataCache` is set without a derivable/explicit `storeId` (FR-008a) in src/index.ts
+- [ ] T014 [US2] Refactor the existing `deriveStoreId` (src/cache/cached-store.ts:107-120) into src/store/identity.ts as `deriveStoreId(store): string | null` (deterministic-or-null, replacing the `store-${Date.now()}` fabrication; HTTP detection keeps duck-typing on `baseUrl` — the real `HTTPStore` field, src/store/http.ts:10); update src/cache/cached-store.ts to consume it, keeping a per-process fallback id for the local disk cache. NOTE: the fallback change alters the on-disk cache identity for unrecognized stores (operational cache-bust) — must be covered by the T037 CHANGELOG entry (research.md D3)
+- [ ] T015 [US2] Add `OpenOptions { metadataCache?, storeId?, observability? }` and thread it through `open`/`openGroup`/`openArray` in src/index.ts. The open path has its OWN direct `store.get` metadata reads (NOT routed through `ZarrGroup.getMeta`): root `.zarray`/`.zgroup` in `open`/`openGroup`/`openArray`, `.zattrs` in `openArrayFromMeta`/`openGroupFromMeta`, and `.zmetadata` in `loadConsolidatedMetadata` — EVERY one of these call sites must go through a shared read-through helper (`cache.get` → `store.get` → `cache.set` no-TTL), else the first metadata read of each open is never cached and SC-002 fails. Also: shared-tier `onCacheHit`/`onCacheMiss`, error/unavailable cache falls back to store (FR-011), fail-fast when `metadataCache` is set without a derivable/explicit `storeId` (FR-008a), and propagate `metadataCache`/`storeId`/`observability` into the constructed `ZarrGroup` (consumed by T016)
 - [ ] T016 [US2] Carry `metadataCache`/`storeId`/`observability` on `ZarrGroup` so `getMeta`/`getArray`/`getGroup` read child metadata through the cache in src/group.ts
 - [ ] T017 [P] [US2] Implement `RedisCache implements Cache` (dynamic `import("ioredis")` like `loadS3SDK`, `PX` for TTL, binary-safe buffers, clear error if `ioredis` missing) in src/redis/index.ts
 - [ ] T018 [US2] Export `Cache`, `InMemoryCache`, and `OpenOptions` from src/index.ts (RedisCache exported only from the `./redis` entry)
@@ -100,8 +100,8 @@ Single-library layout: `src/`, `tests/` at repository root (per plan.md).
 ### Implementation for User Story 3
 
 - [ ] T021 [US3] Add `observability?: ObservabilityHooks` to `HTTPStoreOptions`/`S3StoreOptions` in src/store/store.ts, and fire `onStoreFetch({key, bytes, latencyMs})` around successful fetches in src/store/http.ts and src/store/s3.ts
-- [ ] T022 [US3] Thread `observability` into `LoadChunksContext` and fire memory `onCacheHit`/`onCacheMiss` and `onChunkDecoded` (timing the `codec.decode`) in src/chunk/loader.ts
-- [ ] T023 [P] [US3] Add an optional `onInFlightBytes` callback to `ByteLimiter` (invoked on budget change in `acquire`/`release`) in src/chunk/limiter.ts
+- [ ] T022 [US3] Thread `observability` into `LoadChunksContext` and fire memory `onCacheHit`/`onCacheMiss` and `onChunkDecoded` (timing the `codec.decode`) in src/chunk/loader.ts — per-chunk hot loop: guard `if (hooks?.onX)` BEFORE building each payload object (never `safeInvoke(hooks?.onX, {...})`), or T020 fails
+- [ ] T023 [P] [US3] Add an optional `onInFlightBytes` callback to `ByteLimiter` (invoked on budget change in `acquire`/`release`) in src/chunk/limiter.ts — guard on callback existence before invoking (zero dispatch when absent, SC-004)
 - [ ] T024 [US3] Add `observability?` to `CacheOptions` and fire disk `onCacheHit`/`onCacheMiss` (tier `"disk"`) in src/cache/cached-store.ts
 - [ ] T025 [US3] Add `observability?: ObservabilityHooks` to `ReadOptions` and thread it into the loader context and `ByteLimiter` in src/array.ts
 
@@ -156,7 +156,7 @@ Single-library layout: `src/`, `tests/` at repository root (per plan.md).
 
 - [ ] T035 [P] Add the peak-memory formula (`peakPerChunk = chunkBytes × (decodeFactor + byteSwapFactor)`) and how to derive `maxInFlightBytes` from a pod RAM limit (FR-028) to README.md
 - [ ] T036 [P] Add README usage for the Redis metadata cache and observability hooks (mirroring quickstart.md) to README.md
-- [ ] T037 Add a changeset, bump version `0.4.0` → `0.5.0`, and add a CHANGELOG entry covering all five tracks (note the unbounded disk-cache warning is a new warning, not a behavior break) in package.json + changeset/CHANGELOG
+- [ ] T037 Add a changeset, bump version `0.4.0` → `0.5.0`, and add a CHANGELOG entry covering all five tracks (note the unbounded disk-cache warning is a new warning, not a behavior break; note the disk-cache identity change for unrecognized stores from T014 — operational cache-bust on deploy, research.md D3) in package.json + changeset/CHANGELOG
 - [ ] T038 Run full validation: `npm test && npm run lint && npm run typecheck && npm run build && npm run test:cjs && npm run test:esm`
 - [ ] T039 Execute the quickstart.md validation checklist end-to-end (all six story validations)
 
