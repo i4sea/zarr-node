@@ -168,7 +168,11 @@ export class S3Store implements Store {
             { abortSignal: AbortSignal.timeout(this.timeout) },
           );
           const body = response.Body;
-          if (!body) return null;
+          if (!body) {
+            // A 2xx GetObject with no body is an anomalous response, not a
+            // missing key — null is reserved for "key absent" (Store contract).
+            throw new StoreError(`${describeOp} succeeded but returned no body`);
+          }
           const bytes = await body.transformToByteArray();
           if (this.hooks?.onStoreFetch) {
             safeInvoke(this.hooks.onStoreFetch, {
@@ -187,6 +191,7 @@ export class S3Store implements Store {
       );
     } catch (err) {
       if (isNotFound(err)) return null;
+      if (err instanceof StoreError) throw err;
       if (err instanceof RetryExhaustedError) {
         throw new StoreError(`${describeOp} ${err.message}`);
       }

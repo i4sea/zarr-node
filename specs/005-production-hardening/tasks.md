@@ -138,13 +138,13 @@ Single-library layout: `src/`, `tests/` at repository root (per plan.md).
 
 ### Tests for User Story 5 (write first, confirm failing) ⚠️
 
-- [ ] T031 [P] [US5] Loader tests: absent chunk in default mode → zeros returned AND `onMissingChunk({key})` fired (both full-fetch and byte-range miss paths); `strict: true` → `MissingChunkError` thrown with the key; `strict` omitted → byte-identical to current behavior in tests/unit/loader.test.ts
+- [X] T031 [P] [US5] Loader tests: absent chunk in default mode → zeros returned AND `onMissingChunk({key})` fired (both full-fetch and byte-range miss paths); `strict: true` → `MissingChunkError` thrown with the key; `strict` omitted → byte-identical to current behavior in tests/unit/loader.test.ts
 
 ### Implementation for User Story 5
 
-- [ ] T032 [P] [US5] Add `MissingChunkError extends ZarrError` (with the missing key in its message) in src/errors.ts and export it from src/index.ts
-- [ ] T033 [US5] Add `strict?: boolean` to `LoadChunksContext`; on both missing-chunk paths fire `onMissingChunk` and, when `strict`, throw `MissingChunkError` instead of filling zeros, in src/chunk/loader.ts
-- [ ] T034 [US5] Add `strict?: boolean` to `ReadOptions` and thread it into the loader context in src/array.ts
+- [X] T032 [P] [US5] Add `MissingChunkError extends ZarrError` (with the missing key in its message) in src/errors.ts and export it from src/index.ts
+- [X] T033 [US5] Add `strict?: boolean` to `LoadChunksContext`; on both missing-chunk paths fire `onMissingChunk` and, when `strict`, throw `MissingChunkError` instead of filling zeros, in src/chunk/loader.ts
+- [X] T034 [US5] Add `strict?: boolean` to `ReadOptions` and thread it into the loader context in src/array.ts
 
 **Checkpoint**: All five user stories independently functional.
 

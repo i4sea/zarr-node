@@ -185,8 +185,6 @@ describe("loader memory-tier hooks", () => {
       store,
       codec,
       [{ key: "0.0", chunkCoord: [0, 0] }],
-      0,
-      4,
       {
         concurrency: 2,
         memoryCache,

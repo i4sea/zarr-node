@@ -33,6 +33,13 @@ export class SliceError extends ZarrError {
   }
 }
 
+export class MissingChunkError extends ZarrError {
+  constructor(key: string) {
+    super(`Missing chunk: "${key}"`);
+    this.name = "MissingChunkError";
+  }
+}
+
 export class UnsupportedOperationError extends StoreError {
   constructor(operation: string, storeName: string) {
     super(`${storeName} does not support ${operation}`);

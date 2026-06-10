@@ -98,7 +98,11 @@ export class ZarrGroup {
    * prevents the `arrays × concurrency × chunkSize` blow-up of reading many
    * compressed arrays at once: the total live decoded footprint stays near the
    * single budget instead of multiplying per array.
-   * Invalid array names are silently skipped (partial failure handling).
+   * Invalid array names are silently skipped (partial failure handling), but
+   * a read that starts and then fails (store error, `MissingChunkError` under
+   * `strict`) rejects with that error once every sibling read has settled —
+   * chunk keys are array-path-scoped, so the error identifies which array
+   * failed.
    */
   async readMultiple(
     names: string[],
@@ -130,7 +134,14 @@ export class ZarrGroup {
       return { name, data };
     });
 
+    // allSettled (not all) so sibling reads drain — and release their shared
+    // budget — before a failure is surfaced.
     const settled = await Promise.allSettled(promises);
+    for (const result of settled) {
+      if (result.status === "rejected") {
+        throw result.reason;
+      }
+    }
     for (const result of settled) {
       if (result.status === "fulfilled") {
         results.set(result.value.name, result.value.data);

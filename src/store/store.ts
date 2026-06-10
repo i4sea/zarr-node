@@ -1,10 +1,19 @@
 import type { ObservabilityHooks } from "../observability.js";
 
 export interface Store {
+  /**
+   * Fetch a key's bytes. `null` means strictly "key absent" (the reader maps
+   * it to fill-value semantics, and to `MissingChunkError` under `strict`);
+   * any other failure MUST throw (e.g. `StoreError`), never return `null`.
+   */
   get(key: string): Promise<Uint8Array | null>;
   has(key: string): Promise<boolean>;
   list(prefix: string): AsyncIterable<string>;
-  /** Fetch a byte range from a key. Optional — not all stores support this. */
+  /**
+   * Fetch a byte range from a key. Optional — not all stores support this.
+   * As with `get`, `null` means strictly "key absent"; other failures MUST
+   * throw rather than return `null`.
+   */
   getRange?(
     key: string,
     offset: number,

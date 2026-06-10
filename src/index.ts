@@ -61,6 +61,7 @@ export {
   StoreError,
   CodecError,
   SliceError,
+  MissingChunkError,
   UnsupportedOperationError,
 } from "./errors.js";
 export type { CacheTier, ObservabilityHooks } from "./observability.js";

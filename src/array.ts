@@ -67,9 +67,25 @@ export interface ReadOptions {
    * limiter created for this read).
    */
   observability?: ObservabilityHooks;
+  /**
+   * Throw `MissingChunkError` when a chunk is absent from the store instead of
+   * filling its region with the array's `fill_value` (Zarr v2 semantics;
+   * zeros when `fill_value` is 0 or null). Default: false.
+   */
+  strict?: boolean;
 }
 
 export type Slice = (number | [number, number] | null)[];
+
+/** Per-read options resolved once in `read()` and shared by both read paths. */
+interface ResolvedReadContext {
+  concurrency: number;
+  memoryCache: MemoryCache | null;
+  limiter: ByteLimiter;
+  warnBytes: number;
+  hooks: ObservabilityHooks | undefined;
+  strict: boolean;
+}
 
 export class ZarrArray {
   readonly shape: readonly number[];
@@ -138,29 +154,26 @@ export class ZarrArray {
     options: ReadOptions | undefined,
     sharedLimiter: ByteLimiter | null,
   ): Promise<TypedArray> {
-    const concurrency = options?.concurrency ?? DEFAULT_CONCURRENCY;
-    const memoryCache = options?.memoryCache ?? null;
     const maxInFlightBytes =
       options?.maxInFlightBytes ?? DEFAULT_MAX_IN_FLIGHT_BYTES;
-    const warnBytes =
-      options?.largeReadWarningBytes ?? DEFAULT_LARGE_READ_WARNING_BYTES;
     const hooks = options?.observability;
-    const limiter =
-      sharedLimiter ??
-      new ByteLimiter(maxInFlightBytes, hooks?.onInFlightBytes);
+    const ctx: ResolvedReadContext = {
+      concurrency: options?.concurrency ?? DEFAULT_CONCURRENCY,
+      memoryCache: options?.memoryCache ?? null,
+      limiter:
+        sharedLimiter ??
+        new ByteLimiter(maxInFlightBytes, hooks?.onInFlightBytes),
+      warnBytes:
+        options?.largeReadWarningBytes ?? DEFAULT_LARGE_READ_WARNING_BYTES,
+      hooks,
+      strict: options?.strict ?? false,
+    };
 
     if (selection !== undefined) {
-      return this.getSlice(
-        selection,
-        concurrency,
-        memoryCache,
-        limiter,
-        warnBytes,
-        hooks,
-      );
+      return this.getSlice(selection, ctx);
     }
 
-    return this.getFull(concurrency, memoryCache, limiter, warnBytes, hooks);
+    return this.getFull(ctx);
   }
 
   /** Estimated peak bytes a single in-flight decoded chunk holds. */
@@ -171,6 +184,23 @@ export class ZarrArray {
     const decodeFactor = this.codec ? DECODE_PEAK_FACTOR : 1;
     const byteSwapFactor = isBigEndian(this.dtype) ? 1 : 0;
     return chunkByteSize * (decodeFactor + byteSwapFactor);
+  }
+
+  /**
+   * Pre-fill a freshly allocated output with the array's fill_value, so
+   * regions whose chunks are absent from the store come back as fill_value
+   * (missing chunks are never delivered by the loader). TypedArrays are
+   * zero-initialized, so 0/null fill values need no pass.
+   */
+  private prefillOutput(output: TypedArray): void {
+    const fv = this.fillValue;
+    if (fv === null || fv === 0) return;
+    if (output instanceof BigInt64Array || output instanceof BigUint64Array) {
+      // JSON fill_value is a number; non-finite values are unrepresentable.
+      if (Number.isFinite(fv)) output.fill(BigInt(Math.trunc(fv)));
+      return;
+    }
+    output.fill(fv);
   }
 
   /** Build a Ctor-typed view over chunk bytes, byte-swapping big-endian data. */
@@ -208,13 +238,9 @@ export class ZarrArray {
     );
   }
 
-  private async getFull(
-    concurrency: number,
-    memoryCache: MemoryCache | null,
-    limiter: ByteLimiter,
-    warnBytes: number,
-    hooks: ObservabilityHooks | undefined,
-  ): Promise<TypedArray> {
+  private async getFull(ctx: ResolvedReadContext): Promise<TypedArray> {
+    const { concurrency, memoryCache, limiter, warnBytes, hooks, strict } =
+      ctx;
     const ndim = this.shape.length;
     const ranges = computeChunkRanges(this.shape, this.chunks);
     const byteSize = dtypeByteSize(this.dtype);
@@ -226,6 +252,7 @@ export class ZarrArray {
     this.maybeWarnLargeRead(totalElements * byteSize, warnBytes, true);
     const Ctor = dtypeToTypedArrayCtor(this.dtype);
     const output = new Ctor(totalElements);
+    this.prefillOutput(output);
     const bigEndian = isBigEndian(this.dtype);
     const outputStrides = cStrides(this.shape);
 
@@ -243,14 +270,13 @@ export class ZarrArray {
       this.store,
       this.codec,
       tasks,
-      this.fillValue,
-      chunkByteSize,
       {
         concurrency,
         memoryCache,
         limiter,
         peakPerChunk: this.peakPerChunk(chunkByteSize),
         observability: hooks,
+        strict,
       },
       (chunk: LoadedChunk) => {
         const chunkTyped = this.toTypedChunk(
@@ -323,12 +349,10 @@ export class ZarrArray {
 
   private async getSlice(
     selection: Slice,
-    concurrency: number,
-    memoryCache: MemoryCache | null,
-    limiter: ByteLimiter,
-    warnBytes: number,
-    hooks: ObservabilityHooks | undefined,
+    ctx: ResolvedReadContext,
   ): Promise<TypedArray> {
+    const { concurrency, memoryCache, limiter, warnBytes, hooks, strict } =
+      ctx;
     const ndim = this.shape.length;
     const ranges = normalizeSelection(selection, this.shape);
     const byteSize = dtypeByteSize(this.dtype);
@@ -368,6 +392,7 @@ export class ZarrArray {
     this.maybeWarnLargeRead(totalElements * byteSize, warnBytes, false);
     const Ctor = dtypeToTypedArrayCtor(this.dtype);
     const output = new Ctor(totalElements);
+    this.prefillOutput(output);
     const bigEndian = isBigEndian(this.dtype);
     const outputStrides = cStrides(outputShape);
 
@@ -375,14 +400,13 @@ export class ZarrArray {
       this.store,
       this.codec,
       tasks,
-      this.fillValue,
-      chunkByteSize,
       {
         concurrency,
         memoryCache,
         limiter,
         peakPerChunk: this.peakPerChunk(chunkByteSize),
         observability: hooks,
+        strict,
       },
       (chunk: LoadedChunk) => {
         const chunkTyped = this.toTypedChunk(
@@ -496,21 +520,22 @@ export class ZarrArray {
     const overlapStart = ranges.map((r, d) => Math.max(r.start, chunkStart[d]));
     const overlapEnd = ranges.map((r, d) => Math.min(r.stop, chunkEnd[d]));
 
-    // Check contiguity: trailing dimensions must cover full chunk width
-    // Find the first dimension where the overlap is partial
+    // Check contiguity: trailing dimensions must cover the full STORED chunk
+    // width. Zarr v2 stores every chunk padded to the full chunk shape, so an
+    // edge chunk clipped by the array bounds in a trailing dimension can never
+    // be read contiguously — the overlap (clipped to the array) cannot reach
+    // the stored width, and we fall back to a full fetch.
     for (let d = ndim - 1; d >= 1; d--) {
-      const chunkDimSize = chunkEnd[d] - chunkStart[d];
       const overlapSize = overlapEnd[d] - overlapStart[d];
-      if (overlapSize !== chunkDimSize) {
+      if (overlapSize !== this.chunks[d]) {
         // Not contiguous — can't use byte range
         return null;
       }
     }
 
-    // All trailing dims are full chunk width → contiguous
-    // Compute C-order strides for the actual chunk shape
-    const actualChunkShape = chunkEnd.map((e, d) => e - chunkStart[d]);
-    const strides = cStrides(actualChunkShape);
+    // All trailing dims are full stored width → contiguous. Strides over the
+    // stored (padded, full-shape) chunk layout.
+    const strides = cStrides(this.chunks as number[]);
 
     // First element offset within chunk
     const firstLocal = overlapStart.map((s, d) => s - chunkStart[d]);
