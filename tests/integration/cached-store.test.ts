@@ -209,6 +209,31 @@ describe("CachedStore — cross-session (US4)", () => {
   });
 });
 
+describe("CachedStore — fallback store identity", () => {
+  it("distinct unrecognized stores never share a cache namespace", async () => {
+    // Neither FileSystemStore exposes a derivable identity and no storeId is
+    // passed — each instance must get its own fallback namespace, otherwise
+    // store B would serve store A's cached chunks.
+    const storeA = new FileSystemStore({ path: join(FIXTURES, "simple_1d") });
+    const storeB = new FileSystemStore({ path: join(FIXTURES, "chunked_2d") });
+
+    const cachedA = new CachedStore(storeA, {
+      cacheDir,
+      maxSizeBytes: 64 * 1024 * 1024,
+    });
+    const cachedB = new CachedStore(storeB, {
+      cacheDir,
+      maxSizeBytes: 64 * 1024 * 1024,
+    });
+
+    // Populate A's cache with chunk "0" (exists only in simple_1d)
+    expect(await cachedA.get("0")).not.toBeNull();
+
+    // B must not see A's cached entry — "0" does not exist in chunked_2d
+    expect(await cachedB.get("0")).toBeNull();
+  });
+});
+
 async function listRecursive(dir: string): Promise<string[]> {
   const { readdir: rd } = await import("node:fs/promises");
   const results: string[] = [];

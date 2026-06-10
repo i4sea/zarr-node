@@ -1,4 +1,5 @@
 import type { Store } from "../store/store.js";
+import { deriveStoreId } from "../store/identity.js";
 import { DiskCache } from "./disk.js";
 
 const METADATA_SUFFIXES = [".zarray", ".zattrs", ".zgroup", ".zmetadata"];
@@ -35,7 +36,8 @@ export class CachedStore implements Store {
       );
     }
 
-    const storeId = options.storeId ?? deriveStoreId(inner);
+    const storeId =
+      options.storeId ?? deriveStoreId(inner) ?? fallbackStoreId();
     const ttlMs = options.ttl !== undefined ? options.ttl * 1000 : null;
     const maxSizeBytes = options.maxSizeBytes ?? null;
     this.cache = new DiskCache(options.cacheDir, storeId, ttlMs, maxSizeBytes);
@@ -113,18 +115,15 @@ function isMetadataKey(key: string): boolean {
   return METADATA_SUFFIXES.some((suffix) => key.endsWith(suffix));
 }
 
-function deriveStoreId(store: Store): string {
-  // Try to extract identity from known store types
-  const s = store as unknown as Record<string, unknown>;
-  if (typeof s.bucket === "string") {
-    // S3Store-like
-    const prefix = typeof s.prefix === "string" ? s.prefix : "";
-    return `s3://${s.bucket}/${prefix}`;
-  }
-  if (typeof s.baseUrl === "string") {
-    // HTTPStore-like
-    return s.baseUrl as string;
-  }
-  // Fallback: use a generic identifier
-  return `store-${Date.now()}`;
+// Per-process fallback for stores with no derivable identity. The disk cache
+// is local to the pod, so a non-shared id is acceptable here — unlike the
+// shared metadata cache, which fails fast instead (FR-008a). The id must be
+// non-deterministic across restarts: DiskCache maps storeId → directory with
+// no content validation, so a reproducible id (e.g. a bare counter) could
+// hand one dataset another dataset's cached chunks after a restart that
+// constructs stores in a different order.
+let fallbackCounter = 0;
+
+function fallbackStoreId(): string {
+  return `store-local-${process.pid}-${Date.now().toString(36)}-${fallbackCounter++}`;
 }
