@@ -54,6 +54,7 @@ export {
   SliceError,
   UnsupportedOperationError,
 } from "./errors.js";
+export type { CacheTier, ObservabilityHooks } from "./observability.js";
 
 /**
  * Open a Zarr v2 store path and return the appropriate object.

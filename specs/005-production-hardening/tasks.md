@@ -22,7 +22,7 @@ Single-library layout: `src/`, `tests/` at repository root (per plan.md).
 
 **Purpose**: Project configuration enabling the Redis adapter and its tests.
 
-- [ ] T001 Configure `package.json` for the Redis adapter: add `ioredis` to `devDependencies`, add it to `peerDependencies` with `peerDependenciesMeta.ioredis.optional = true`, and add the `./redis` subpath to `exports` (types/import/require pointing at `dist/redis/index.*`). Verify the `tsc` build picks up `src/redis/**` and `postbuild-cjs.mjs` emits the CJS variant.
+- [X] T001 Configure `package.json` for the Redis adapter: add `ioredis` to `devDependencies`, add it to `peerDependencies` with `peerDependenciesMeta.ioredis.optional = true`, and add the `./redis` subpath to `exports` (types/import/require pointing at `dist/redis/index.*`). Verify the `tsc` build picks up `src/redis/**` and `postbuild-cjs.mjs` emits the CJS variant.
 
 ---
 
@@ -32,8 +32,8 @@ Single-library layout: `src/`, `tests/` at repository root (per plan.md).
 
 **⚠️ CRITICAL**: Complete before US2–US5. (US1 does not depend on this phase.)
 
-- [ ] T002 [P] Write failing unit test for `safeInvoke` (a throwing handler is swallowed and never propagates) in tests/unit/observability.test.ts
-- [ ] T003 Create src/observability.ts exporting `CacheTier`, the `ObservabilityHooks` interface (per contracts/observability.md), and a `safeInvoke(fn, arg)` helper for throw-isolation only — every emission site guards `if (hooks?.onX)` BEFORE constructing the payload (contracts/observability.md → Call-site pattern); re-export both types from src/index.ts
+- [X] T002 [P] Write failing unit test for `safeInvoke` (a throwing handler is swallowed and never propagates) in tests/unit/observability.test.ts
+- [X] T003 Create src/observability.ts exporting `CacheTier`, the `ObservabilityHooks` interface (per contracts/observability.md), and a `safeInvoke(fn, arg)` helper for throw-isolation only — every emission site guards `if (hooks?.onX)` BEFORE constructing the payload (contracts/observability.md → Call-site pattern); re-export both types from src/index.ts
 
 **Checkpoint**: `ObservabilityHooks` type available; user stories can begin.
 

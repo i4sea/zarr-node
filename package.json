@@ -13,6 +13,12 @@
       "require": "./dist/cjs/index.js",
       "default": "./dist/index.js"
     },
+    "./redis": {
+      "types": "./dist/redis/index.d.ts",
+      "import": "./dist/redis/index.js",
+      "require": "./dist/cjs/redis/index.js",
+      "default": "./dist/redis/index.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -36,13 +42,17 @@
     "format": "prettier --write 'src/**/*.ts' 'tests/**/*.ts'",
     "format:check": "prettier --check 'src/**/*.ts' 'tests/**/*.ts'",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run typecheck && npm run lint && npm test && npm run build && npm run test:cjs && npm run test:esm"
+    "prepublishOnly": "npm run typecheck && npm run lint && npm test && npm run build && node scripts/validate-exports.mjs && npm run test:cjs && npm run test:esm"
   },
   "peerDependencies": {
-    "@aws-sdk/client-s3": "^3.0.0"
+    "@aws-sdk/client-s3": "^3.0.0",
+    "ioredis": "^5.0.0"
   },
   "peerDependenciesMeta": {
     "@aws-sdk/client-s3": {
+      "optional": true
+    },
+    "ioredis": {
       "optional": true
     }
   },
@@ -51,6 +61,7 @@
     "@types/node": "^25.5.2",
     "@vitest/coverage-v8": "^3.1.1",
     "eslint": "^9.25.0",
+    "ioredis": "^5.11.1",
     "prettier": "^3.5.3",
     "tsx": "^4.21.0",
     "typescript": "^5.8.3",
