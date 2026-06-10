@@ -1,4 +1,6 @@
 import { StoreError, UnsupportedOperationError } from "../errors.js";
+import type { ObservabilityHooks } from "../observability.js";
+import { safeInvoke } from "../observability.js";
 import type { Store, HTTPStoreOptions } from "./store.js";
 
 const DEFAULT_TIMEOUT = 30000;
@@ -10,15 +12,18 @@ export class HTTPStore implements Store {
   private readonly baseUrl: string;
   private readonly timeout: number;
   private readonly headers: Record<string, string>;
+  private readonly hooks?: ObservabilityHooks;
 
   constructor(options: HTTPStoreOptions) {
     this.baseUrl = options.url.replace(/\/+$/, "");
     this.timeout = options.timeout ?? DEFAULT_TIMEOUT;
     this.headers = options.headers ?? {};
+    this.hooks = options.observability;
   }
 
   async get(key: string): Promise<Uint8Array | null> {
     const url = `${this.baseUrl}/${key}`;
+    const start = this.hooks?.onStoreFetch ? performance.now() : 0;
     const response = await this.fetchWithRetry(url);
 
     if (response.status === 404) return null;
@@ -30,6 +35,13 @@ export class HTTPStore implements Store {
     }
 
     const buf = await response.arrayBuffer();
+    if (this.hooks?.onStoreFetch) {
+      safeInvoke(this.hooks.onStoreFetch, {
+        key,
+        bytes: buf.byteLength,
+        latencyMs: performance.now() - start,
+      });
+    }
     return new Uint8Array(buf);
   }
 
@@ -50,6 +62,7 @@ export class HTTPStore implements Store {
   ): Promise<Uint8Array | null> {
     const url = `${this.baseUrl}/${key}`;
     const end = offset + length - 1;
+    const start = this.hooks?.onStoreFetch ? performance.now() : 0;
     const response = await this.fetchWithRetry(url, "GET", {
       Range: `bytes=${offset}-${end}`,
     });
@@ -62,7 +75,21 @@ export class HTTPStore implements Store {
     }
 
     const buf = await response.arrayBuffer();
-    return new Uint8Array(buf);
+    // A 200 means the server ignored the Range header and sent the full
+    // object — slice locally instead of returning the whole body as if it
+    // were the requested range (which would silently corrupt chunk data).
+    const data =
+      response.status === 200
+        ? new Uint8Array(buf).slice(offset, offset + length)
+        : new Uint8Array(buf);
+    if (this.hooks?.onStoreFetch) {
+      safeInvoke(this.hooks.onStoreFetch, {
+        key,
+        bytes: data.byteLength,
+        latencyMs: performance.now() - start,
+      });
+    }
+    return data;
   }
 
   async *list(_prefix: string): AsyncIterable<string> {

@@ -121,6 +121,7 @@ export class ZarrGroup {
     // One byte budget shared across every array read.
     const limiter = new ByteLimiter(
       options?.maxInFlightBytes ?? DEFAULT_MAX_IN_FLIGHT_BYTES,
+      options?.observability?.onInFlightBytes,
     );
 
     // Read all arrays through the shared budget.

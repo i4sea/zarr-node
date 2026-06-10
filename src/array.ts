@@ -3,6 +3,7 @@ import type { ZarrayMeta, Zattrs } from "./metadata/types.js";
 import type { Codec } from "./codec/codec.js";
 import type { TypedArray } from "./dtype.js";
 import type { MemoryCache } from "./cache/memory.js";
+import type { ObservabilityHooks } from "./observability.js";
 import {
   dtypeToTypedArrayCtor,
   dtypeByteSize,
@@ -60,6 +61,12 @@ export interface ReadOptions {
    * exceed this many bytes. Default: 512 MiB. Use `Infinity` to disable.
    */
   largeReadWarningBytes?: number;
+  /**
+   * Per-read observability hooks: memory-tier `onCacheHit`/`onCacheMiss`,
+   * `onChunkDecoded`, and `onInFlightBytes` (budget changes in the byte
+   * limiter created for this read).
+   */
+  observability?: ObservabilityHooks;
 }
 
 export type Slice = (number | [number, number] | null)[];
@@ -137,7 +144,10 @@ export class ZarrArray {
       options?.maxInFlightBytes ?? DEFAULT_MAX_IN_FLIGHT_BYTES;
     const warnBytes =
       options?.largeReadWarningBytes ?? DEFAULT_LARGE_READ_WARNING_BYTES;
-    const limiter = sharedLimiter ?? new ByteLimiter(maxInFlightBytes);
+    const hooks = options?.observability;
+    const limiter =
+      sharedLimiter ??
+      new ByteLimiter(maxInFlightBytes, hooks?.onInFlightBytes);
 
     if (selection !== undefined) {
       return this.getSlice(
@@ -146,10 +156,11 @@ export class ZarrArray {
         memoryCache,
         limiter,
         warnBytes,
+        hooks,
       );
     }
 
-    return this.getFull(concurrency, memoryCache, limiter, warnBytes);
+    return this.getFull(concurrency, memoryCache, limiter, warnBytes, hooks);
   }
 
   /** Estimated peak bytes a single in-flight decoded chunk holds. */
@@ -202,6 +213,7 @@ export class ZarrArray {
     memoryCache: MemoryCache | null,
     limiter: ByteLimiter,
     warnBytes: number,
+    hooks: ObservabilityHooks | undefined,
   ): Promise<TypedArray> {
     const ndim = this.shape.length;
     const ranges = computeChunkRanges(this.shape, this.chunks);
@@ -238,6 +250,7 @@ export class ZarrArray {
         memoryCache,
         limiter,
         peakPerChunk: this.peakPerChunk(chunkByteSize),
+        observability: hooks,
       },
       (chunk: LoadedChunk) => {
         const chunkTyped = this.toTypedChunk(
@@ -314,6 +327,7 @@ export class ZarrArray {
     memoryCache: MemoryCache | null,
     limiter: ByteLimiter,
     warnBytes: number,
+    hooks: ObservabilityHooks | undefined,
   ): Promise<TypedArray> {
     const ndim = this.shape.length;
     const ranges = normalizeSelection(selection, this.shape);
@@ -368,6 +382,7 @@ export class ZarrArray {
         memoryCache,
         limiter,
         peakPerChunk: this.peakPerChunk(chunkByteSize),
+        observability: hooks,
       },
       (chunk: LoadedChunk) => {
         const chunkTyped = this.toTypedChunk(

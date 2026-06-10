@@ -28,6 +28,22 @@ describe("readMultiple", () => {
     expect(wind.length).toBe(12);
   });
 
+  it("fires onInFlightBytes on the shared byte limiter", async () => {
+    const store = new FileSystemStore({ path: join(FIXTURES, "multi_array") });
+    const root = await openGroup(store);
+
+    const readings: number[] = [];
+    const results = await root.readMultiple(["temperature", "wind"], undefined, {
+      observability: { onInFlightBytes: (current) => readings.push(current) },
+    });
+
+    expect(results.size).toBe(2);
+    expect(readings.length).toBeGreaterThan(0);
+    expect(readings.some((r) => r > 0)).toBe(true);
+    // Budget fully returned once the read completes.
+    expect(readings[readings.length - 1]).toBe(0);
+  });
+
   it("reads all arrays without selection (full read)", async () => {
     const store = new FileSystemStore({ path: join(FIXTURES, "multi_array") });
     const root = await openGroup(store);

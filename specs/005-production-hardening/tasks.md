@@ -94,16 +94,16 @@ Single-library layout: `src/`, `tests/` at repository root (per plan.md).
 
 ### Tests for User Story 3 (write first, confirm failing) ⚠️
 
-- [ ] T019 [P] [US3] Tests asserting `onStoreFetch` (key/bytes/latencyMs), memory `onCacheHit`/`onCacheMiss` (tier `"memory"`), disk `onCacheHit`/`onCacheMiss` (tier `"disk"`), `onChunkDecoded` (bytes/codec/decodeMs), and `onInFlightBytes` fire with correct payloads in tests/unit/observability.test.ts
-- [ ] T020 [P] [US3] Benchmark assertion: a read with no hooks registered is statistically unchanged from baseline (SC-004 zero-overhead) in tests/integration/benchmark.test.ts
+- [X] T019 [P] [US3] Tests asserting `onStoreFetch` (key/bytes/latencyMs), memory `onCacheHit`/`onCacheMiss` (tier `"memory"`), disk `onCacheHit`/`onCacheMiss` (tier `"disk"`), `onChunkDecoded` (bytes/codec/decodeMs), and `onInFlightBytes` fire with correct payloads in tests/unit/observability.test.ts
+- [X] T020 [P] [US3] Benchmark assertion: a read with no hooks registered is statistically unchanged from baseline (SC-004 zero-overhead) in tests/integration/benchmark.test.ts
 
 ### Implementation for User Story 3
 
-- [ ] T021 [US3] Add `observability?: ObservabilityHooks` to `HTTPStoreOptions`/`S3StoreOptions` in src/store/store.ts, and fire `onStoreFetch({key, bytes, latencyMs})` around successful fetches in src/store/http.ts and src/store/s3.ts
-- [ ] T022 [US3] Thread `observability` into `LoadChunksContext` and fire memory `onCacheHit`/`onCacheMiss` and `onChunkDecoded` (timing the `codec.decode`) in src/chunk/loader.ts — per-chunk hot loop: guard `if (hooks?.onX)` BEFORE building each payload object (never `safeInvoke(hooks?.onX, {...})`), or T020 fails
-- [ ] T023 [P] [US3] Add an optional `onInFlightBytes` callback to `ByteLimiter` (invoked on budget change in `acquire`/`release`) in src/chunk/limiter.ts — guard on callback existence before invoking (zero dispatch when absent, SC-004)
-- [ ] T024 [US3] Add `observability?` to `CacheOptions` and fire disk `onCacheHit`/`onCacheMiss` (tier `"disk"`) in src/cache/cached-store.ts
-- [ ] T025 [US3] Add `observability?: ObservabilityHooks` to `ReadOptions` and thread it into the loader context and `ByteLimiter` in src/array.ts
+- [X] T021 [US3] Add `observability?: ObservabilityHooks` to `HTTPStoreOptions`/`S3StoreOptions` in src/store/store.ts, and fire `onStoreFetch({key, bytes, latencyMs})` around successful fetches in src/store/http.ts and src/store/s3.ts
+- [X] T022 [US3] Thread `observability` into `LoadChunksContext` and fire memory `onCacheHit`/`onCacheMiss` and `onChunkDecoded` (timing the `codec.decode`) in src/chunk/loader.ts — per-chunk hot loop: guard `if (hooks?.onX)` BEFORE building each payload object (never `safeInvoke(hooks?.onX, {...})`), or T020 fails
+- [X] T023 [P] [US3] Add an optional `onInFlightBytes` callback to `ByteLimiter` (invoked on budget change in `acquire`/`release`) in src/chunk/limiter.ts — guard on callback existence before invoking (zero dispatch when absent, SC-004)
+- [X] T024 [US3] Add `observability?` to `CacheOptions` and fire disk `onCacheHit`/`onCacheMiss` (tier `"disk"`) in src/cache/cached-store.ts
+- [X] T025 [US3] Add `observability?: ObservabilityHooks` to `ReadOptions` and thread it into the loader context and `ByteLimiter` in src/array.ts
 
 **Checkpoint**: US1–US3 independently functional.
 

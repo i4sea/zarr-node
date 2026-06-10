@@ -1,3 +1,5 @@
+import type { ObservabilityHooks } from "../observability.js";
+
 export interface Store {
   get(key: string): Promise<Uint8Array | null>;
   has(key: string): Promise<boolean>;
@@ -18,6 +20,8 @@ export interface HTTPStoreOptions {
   url: string;
   timeout?: number;
   headers?: Record<string, string>;
+  /** Per-instance observability hooks (`onStoreFetch`). */
+  observability?: ObservabilityHooks;
 }
 
 export interface S3StoreOptions {
@@ -25,4 +29,6 @@ export interface S3StoreOptions {
   prefix?: string;
   region?: string;
   endpoint?: string;
+  /** Per-instance observability hooks (`onStoreFetch`). */
+  observability?: ObservabilityHooks;
 }

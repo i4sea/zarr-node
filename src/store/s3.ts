@@ -1,4 +1,6 @@
 import { StoreError } from "../errors.js";
+import type { ObservabilityHooks } from "../observability.js";
+import { safeInvoke } from "../observability.js";
 import type { Store, S3StoreOptions } from "./store.js";
 
 const MAX_RETRIES = 3;
@@ -24,6 +26,7 @@ export class S3Store implements Store {
   private readonly prefix: string;
   private readonly region?: string;
   private readonly endpoint?: string;
+  private readonly hooks?: ObservabilityHooks;
   private clientPromise: Promise<S3Client> | null = null;
 
   constructor(options: S3StoreOptions) {
@@ -31,11 +34,14 @@ export class S3Store implements Store {
     this.prefix = options.prefix?.replace(/\/+$/, "") ?? "";
     this.region = options.region;
     this.endpoint = options.endpoint;
+    this.hooks = options.observability;
   }
 
   async get(key: string): Promise<Uint8Array | null> {
     const client = await this.getClient();
     const fullKey = this.resolveKey(key);
+    // Timer spans every attempt plus backoff, matching HTTPStore semantics.
+    const start = this.hooks?.onStoreFetch ? performance.now() : 0;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
@@ -46,6 +52,13 @@ export class S3Store implements Store {
         const body = response.Body;
         if (!body) return null;
         const bytes = await body.transformToByteArray();
+        if (this.hooks?.onStoreFetch) {
+          safeInvoke(this.hooks.onStoreFetch, {
+            key,
+            bytes: bytes.byteLength,
+            latencyMs: performance.now() - start,
+          });
+        }
         return new Uint8Array(bytes);
       } catch (err) {
         if (isNotFound(err)) return null;
@@ -88,6 +101,8 @@ export class S3Store implements Store {
     const client = await this.getClient();
     const fullKey = this.resolveKey(key);
     const end = offset + length - 1;
+    // Timer spans every attempt plus backoff, matching HTTPStore semantics.
+    const start = this.hooks?.onStoreFetch ? performance.now() : 0;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
@@ -102,6 +117,13 @@ export class S3Store implements Store {
         const body = response.Body;
         if (!body) return null;
         const bytes = await body.transformToByteArray();
+        if (this.hooks?.onStoreFetch) {
+          safeInvoke(this.hooks.onStoreFetch, {
+            key,
+            bytes: bytes.byteLength,
+            latencyMs: performance.now() - start,
+          });
+        }
         return new Uint8Array(bytes);
       } catch (err) {
         if (isNotFound(err)) return null;

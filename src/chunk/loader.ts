@@ -1,6 +1,8 @@
 import type { Store } from "../store/store.js";
 import type { Codec } from "../codec/codec.js";
 import type { MemoryCache } from "../cache/memory.js";
+import type { ObservabilityHooks } from "../observability.js";
+import { safeInvoke } from "../observability.js";
 import type { ByteLimiter } from "./limiter.js";
 
 export interface ChunkTask {
@@ -30,6 +32,8 @@ export interface LoadChunksContext {
    * limiter cost for full-chunk reads.
    */
   peakPerChunk: number;
+  /** Per-read observability hooks (memory-tier hit/miss, chunk decode). */
+  observability?: ObservabilityHooks;
 }
 
 /**
@@ -53,6 +57,7 @@ export async function loadChunks(
   onChunk: (chunk: LoadedChunk) => void,
 ): Promise<void> {
   const { concurrency, memoryCache, limiter, peakPerChunk } = ctx;
+  const hooks = ctx.observability;
 
   // Can we use byte-range requests? Only when uncompressed and store supports it.
   const getRange = codec === null ? store.getRange?.bind(store) : undefined;
@@ -63,8 +68,14 @@ export async function loadChunks(
     if (memoryCache) {
       const cached = memoryCache.get(task.key);
       if (cached !== null) {
+        if (hooks?.onCacheHit) {
+          safeInvoke(hooks.onCacheHit, { tier: "memory", key: task.key });
+        }
         onChunk({ chunkCoord: task.chunkCoord, data: cached });
         return;
+      }
+      if (hooks?.onCacheMiss) {
+        safeInvoke(hooks.onCacheMiss, { tier: "memory", key: task.key });
       }
     }
 
@@ -108,7 +119,18 @@ export async function loadChunks(
         return;
       }
 
-      const decoded = codec ? await codec.decode(raw) : raw;
+      let decoded: Uint8Array;
+      if (hooks?.onChunkDecoded) {
+        const start = performance.now();
+        decoded = codec ? await codec.decode(raw) : raw;
+        safeInvoke(hooks.onChunkDecoded, {
+          bytes: decoded.byteLength,
+          codec: codec ? codec.id : null,
+          decodeMs: performance.now() - start,
+        });
+      } else {
+        decoded = codec ? await codec.decode(raw) : raw;
+      }
 
       // Store decoded result in memory cache.
       if (memoryCache) {

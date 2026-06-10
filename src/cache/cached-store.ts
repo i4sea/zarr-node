@@ -1,5 +1,7 @@
 import type { Store } from "../store/store.js";
 import { deriveStoreId } from "../store/identity.js";
+import type { ObservabilityHooks } from "../observability.js";
+import { safeInvoke } from "../observability.js";
 import { DiskCache } from "./disk.js";
 
 const METADATA_SUFFIXES = [".zarray", ".zattrs", ".zgroup", ".zmetadata"];
@@ -15,17 +17,21 @@ export interface CacheOptions {
   skipLocal?: boolean;
   /** Maximum total cache size in bytes. Oldest entries evicted when exceeded. */
   maxSizeBytes?: number;
+  /** Per-instance observability hooks (disk-tier `onCacheHit`/`onCacheMiss`). */
+  observability?: ObservabilityHooks;
 }
 
 export class CachedStore implements Store {
   private readonly inner: Store;
   private readonly cache: DiskCache;
   private readonly skipLocal: boolean;
+  private readonly hooks?: ObservabilityHooks;
   private readonly inflight = new Map<string, Promise<Uint8Array | null>>();
 
   constructor(inner: Store, options: CacheOptions) {
     this.inner = inner;
     this.skipLocal = options.skipLocal ?? false;
+    this.hooks = options.observability;
 
     if (options.maxSizeBytes == null && !this.skipLocal) {
       console.warn(
@@ -57,7 +63,13 @@ export class CachedStore implements Store {
     // Check cache first
     const cached = await this.cache.get(key);
     if (cached !== null) {
+      if (this.hooks?.onCacheHit) {
+        safeInvoke(this.hooks.onCacheHit, { tier: "disk", key });
+      }
       return cached;
+    }
+    if (this.hooks?.onCacheMiss) {
+      safeInvoke(this.hooks.onCacheMiss, { tier: "disk", key });
     }
 
     // Deduplicate in-flight requests (thundering herd protection)

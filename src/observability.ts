@@ -13,6 +13,10 @@ export type CacheTier = "memory" | "disk" | "shared";
 export interface ObservabilityHooks {
   onCacheHit?(e: { tier: CacheTier; key: string }): void;
   onCacheMiss?(e: { tier: CacheTier; key: string }): void;
+  /**
+   * Fired after a successful store fetch. `latencyMs` spans the whole fetch,
+   * including failed attempts and retry backoff, on every store type.
+   */
   onStoreFetch?(e: { key: string; bytes: number; latencyMs: number }): void;
   onRetry?(e: { attempt: number; status?: number; error?: string }): void;
   onChunkDecoded?(e: {
