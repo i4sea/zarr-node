@@ -60,6 +60,19 @@ describe.skipIf(!ioredisAvailable)("RedisCache (ioredis installed)", () => {
     // must not throw or open a connection.
     expect(() => new RedisCache("redis://localhost:1")).not.toThrow();
   });
+
+  it("accepts ioredis options alongside a URL (fail-fast tuning)", async () => {
+    // With Redis unreachable, bounded options must make the command reject
+    // promptly instead of stalling in the offline queue for ~20 retries.
+    const cache = new RedisCache("redis://127.0.0.1:1", {
+      maxRetriesPerRequest: 0,
+      enableOfflineQueue: false,
+      retryStrategy: () => null,
+    });
+    const started = performance.now();
+    await expect(cache.get("any")).rejects.toThrow();
+    expect(performance.now() - started).toBeLessThan(2000);
+  });
 });
 
 describe.skipIf(!ioredisAvailable || !REDIS_URL)(

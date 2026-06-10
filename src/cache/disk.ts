@@ -21,11 +21,11 @@ export class DiskCache {
     ttlMs: number | null,
     maxSizeBytes: number | null = null,
   ) {
-    if (
-      maxSizeBytes !== null &&
-      (!Number.isFinite(maxSizeBytes) || maxSizeBytes <= 0)
-    ) {
-      throw new Error("DiskCache maxSizeBytes must be a finite number > 0");
+    // Infinity is a valid explicit "no eviction" choice (it also silences
+    // the unbounded-cache warning, unlike omitting the option); only NaN and
+    // non-positive sizes are configuration errors.
+    if (maxSizeBytes !== null && !(maxSizeBytes > 0)) {
+      throw new Error("DiskCache maxSizeBytes must be a number > 0");
     }
     const hash = createHash("sha256")
       .update(storeId)

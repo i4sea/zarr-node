@@ -37,6 +37,20 @@ describe("InMemoryCache — adapter behavior", () => {
     expect(await cache.get("k")).not.toBeNull();
   });
 
+  it("bounds zero-byte negative-cache sentinels (no unbounded entry growth)", async () => {
+    // ABSENT sentinels are 0 bytes; they must still be charged against
+    // maxBytes (by key size) or an absent-only workload never evicts.
+    const cache = new InMemoryCache({ maxBytes: 1024 });
+    for (let i = 0; i < 500; i++) {
+      await cache.set(`store-id:path/to/missing-${i}/.zarray`, new Uint8Array(0));
+    }
+    const lru = (
+      cache as unknown as { lru: { size: number; totalBytes: number } }
+    ).lru;
+    expect(lru.size).toBeLessThan(500);
+    expect(lru.totalBytes).toBeLessThanOrEqual(1024);
+  });
+
   it("LRU eviction also frees the expiry timestamp (no orphan growth)", async () => {
     // 4-byte budget: every set evicts the previous key
     const cache = new InMemoryCache({ maxBytes: 4 });

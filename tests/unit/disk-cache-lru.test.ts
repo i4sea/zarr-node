@@ -97,9 +97,14 @@ describe("DiskCache LRU eviction", () => {
     expect(() => new DiskCache(cacheDir, "test-store", null, -1)).toThrow();
   });
 
-  it("rejects non-finite maxSizeBytes (NaN, Infinity)", () => {
+  it("rejects NaN maxSizeBytes", () => {
     expect(() => new DiskCache(cacheDir, "test-store", null, NaN)).toThrow();
-    expect(() => new DiskCache(cacheDir, "test-store", null, Infinity)).toThrow();
+  });
+
+  it("accepts Infinity as an explicit no-eviction configuration", async () => {
+    const cache = new DiskCache(cacheDir, "test-store", null, Infinity);
+    await cache.set("a", new Uint8Array(200));
+    expect(await cache.get("a")).not.toBeNull();
   });
 
   it("works without maxSizeBytes (no eviction)", async () => {

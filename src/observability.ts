@@ -44,7 +44,13 @@ export interface ObservabilityHooks {
  */
 export function safeInvoke<T>(fn: (arg: T) => void, arg: T): void {
   try {
-    fn(arg);
+    // `(arg) => void` accepts async handlers too (void-return assignability);
+    // a rejected promise from one would otherwise escape this try/catch as an
+    // unhandled rejection and crash the process.
+    const result = fn(arg) as unknown;
+    if (result instanceof Promise) {
+      result.catch(() => {});
+    }
   } catch {
     // Hook errors are intentionally swallowed (observability must never
     // affect read correctness).

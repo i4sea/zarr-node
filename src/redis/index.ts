@@ -34,16 +34,28 @@ async function loadIORedis(): Promise<any> {
  * client (preferred) or a connection URL; with a URL the client is created
  * lazily on first use via dynamic import("ioredis"). TTLs use PX
  * (millisecond) expiry; values are stored as binary-safe buffers.
+ *
+ * With a URL, ioredis defaults apply — notably `maxRetriesPerRequest: 20`
+ * with an offline queue, so commands issued while Redis is unreachable can
+ * stall for tens of seconds before the store fallback (FR-011) kicks in.
+ * Pass `urlOptions` to bound that (e.g. `{ maxRetriesPerRequest: 2,
+ * connectTimeout: 2000, enableOfflineQueue: false }`), or supply your own
+ * configured client.
  */
 export class RedisCache implements Cache {
   private readonly client: RedisClientLike | null;
   private readonly url: string | null;
+  private readonly urlOptions?: Record<string, unknown>;
   private clientPromise: Promise<RedisClientLike> | null = null;
 
-  constructor(clientOrUrl: RedisClientLike | string) {
+  constructor(
+    clientOrUrl: RedisClientLike | string,
+    urlOptions?: Record<string, unknown>,
+  ) {
     if (typeof clientOrUrl === "string") {
       this.client = null;
       this.url = clientOrUrl;
+      this.urlOptions = urlOptions;
     } else {
       this.client = clientOrUrl;
       this.url = null;
@@ -76,7 +88,12 @@ export class RedisCache implements Cache {
     if (this.client) return Promise.resolve(this.client);
     if (!this.clientPromise) {
       this.clientPromise = loadIORedis()
-        .then((Redis) => new Redis(this.url) as RedisClientLike)
+        .then(
+          (Redis) =>
+            (this.urlOptions
+              ? new Redis(this.url, this.urlOptions)
+              : new Redis(this.url)) as RedisClientLike,
+        )
         .catch((err: unknown) => {
           // Don't cache the rejection — let the next call retry creation
           this.clientPromise = null;

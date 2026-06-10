@@ -39,13 +39,13 @@ export class MemoryCache {
     // If key already exists, remove it first
     const existing = this.entries.get(key);
     if (existing !== undefined) {
-      this._totalBytes -= existing.byteLength;
+      this._totalBytes -= this.costOf(key, existing);
       this.entries.delete(key);
     }
 
     // Add new entry
     this.entries.set(key, data);
-    this._totalBytes += data.byteLength;
+    this._totalBytes += this.costOf(key, data);
 
     // Evict oldest entries until under limit
     while (this._totalBytes > this.maxBytes && this.entries.size > 1) {
@@ -53,7 +53,7 @@ export class MemoryCache {
       if (oldest.done) break;
       const oldData = this.entries.get(oldest.value);
       if (!oldData) break;
-      this._totalBytes -= oldData.byteLength;
+      this._totalBytes -= this.costOf(oldest.value, oldData);
       this.entries.delete(oldest.value);
       this.onEvict?.(oldest.value);
     }
@@ -63,9 +63,19 @@ export class MemoryCache {
   delete(key: string): void {
     const existing = this.entries.get(key);
     if (existing !== undefined) {
-      this._totalBytes -= existing.byteLength;
+      this._totalBytes -= this.costOf(key, existing);
       this.entries.delete(key);
     }
+  }
+
+  /**
+   * Byte cost charged against maxBytes. Zero-byte values (the metadata
+   * negative-cache ABSENT sentinels) are charged their key size so an
+   * absent-only workload still triggers eviction — otherwise the entries
+   * Map could grow unboundedly while _totalBytes stays at 0.
+   */
+  private costOf(key: string, data: Uint8Array): number {
+    return data.byteLength > 0 ? data.byteLength : key.length + 16;
   }
 
   /** Remove all cached entries. */

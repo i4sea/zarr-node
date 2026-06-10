@@ -34,6 +34,21 @@ describe("safeInvoke", () => {
 
     expect(handler).toHaveBeenCalledExactlyOnceWith(payload);
   });
+
+  it("swallows a rejecting async handler (no unhandled rejection)", async () => {
+    // `(e) => void` accepts async handlers via void-return assignability; a
+    // rejection must not escape as an unhandled rejection (process crash).
+    const rejecting = (async () => {
+      throw new Error("async handler exploded");
+    }) as unknown as (e: { tier: string; key: string }) => void;
+
+    expect(() =>
+      safeInvoke(rejecting, { tier: "memory", key: "0.0" }),
+    ).not.toThrow();
+    // Give the rejection a tick to surface — vitest fails the test run on
+    // unhandled rejections, so reaching the end cleanly is the assertion.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  });
 });
 
 /** Minimal in-memory Store for driving the loader and CachedStore. */
