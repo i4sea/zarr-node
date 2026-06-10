@@ -1,8 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { rm, readdir, writeFile, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DiskCache } from "../../src/cache/disk.js";
+import { CachedStore } from "../../src/cache/cached-store.js";
+import type { Store } from "../../src/store/store.js";
 
 let cacheDir: string;
 
@@ -118,6 +120,94 @@ describe("DiskCache — TTL", () => {
 
     const result = await cache.get("chunk");
     expect(result).toEqual(new Uint8Array([42]));
+  });
+});
+
+describe("CachedStore — unbounded cache warning (FR-001)", () => {
+  function stubStore(): Store {
+    return {
+      async get() {
+        return null;
+      },
+      async has() {
+        return false;
+      },
+      async *list() {
+        return;
+      },
+    };
+  }
+
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it("warns exactly once when constructed without maxSizeBytes", () => {
+    new CachedStore(stubStore(), { cacheDir });
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const message = String(warnSpy.mock.calls[0][0]);
+    expect(message).toMatch(/unbounded/i);
+    expect(message).toMatch(/maxSizeBytes/);
+  });
+
+  it("warns when maxSizeBytes is null (JS callers bypass the type)", () => {
+    new CachedStore(stubStore(), {
+      cacheDir,
+      maxSizeBytes: null as unknown as number,
+    });
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not warn when maxSizeBytes is set", () => {
+    new CachedStore(stubStore(), { cacheDir, maxSizeBytes: 1024 });
+
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when skipLocal is true", () => {
+    new CachedStore(stubStore(), { cacheDir, skipLocal: true });
+
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("ttl: 0 expires entries instead of caching forever", async () => {
+    let calls = 0;
+    const store: Store = {
+      async get() {
+        calls++;
+        return new Uint8Array([1]);
+      },
+      async has() {
+        return true;
+      },
+      async *list() {
+        return;
+      },
+    };
+    const cached = new CachedStore(store, {
+      cacheDir,
+      storeId: "ttl0",
+      ttl: 0,
+      maxSizeBytes: 1024,
+    });
+
+    await cached.get("chunk/0");
+
+    // Age the cached file so a zero TTL is unambiguously elapsed
+    const probe = new DiskCache(cacheDir, "ttl0", null);
+    const past = new Date(Date.now() - 5000);
+    await utimes(probe.pathFor("chunk/0"), past, past);
+
+    await cached.get("chunk/0");
+    expect(calls).toBe(2);
   });
 });
 

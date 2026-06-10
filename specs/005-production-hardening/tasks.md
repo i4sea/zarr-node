@@ -47,13 +47,13 @@ Single-library layout: `src/`, `tests/` at repository root (per plan.md).
 
 ### Tests for User Story 1 (write first, confirm failing) ⚠️
 
-- [ ] T004 [P] [US1] Failing test: constructing `CachedStore` without `maxSizeBytes` (and `skipLocal` false) calls `console.warn` exactly once with the unbounded-growth risk message; with `maxSizeBytes` set it does NOT warn — in tests/unit/disk-cache.test.ts
-- [ ] T005 [P] [US1] Test asserting eviction keeps total on-disk size ≤ `maxSizeBytes` across sustained writes (SC-001 bound) in tests/unit/disk-cache-lru.test.ts (extend existing if not already covered)
+- [X] T004 [P] [US1] Failing test: constructing `CachedStore` without `maxSizeBytes` (and `skipLocal` false) calls `console.warn` exactly once with the unbounded-growth risk message; with `maxSizeBytes` set it does NOT warn — in tests/unit/disk-cache.test.ts
+- [X] T005 [P] [US1] Test asserting eviction keeps total on-disk size ≤ `maxSizeBytes` across sustained writes (SC-001 bound) in tests/unit/disk-cache-lru.test.ts (extend existing if not already covered)
 
 ### Implementation for User Story 1
 
-- [ ] T006 [US1] Emit a one-time `console.warn` in the `CachedStore` constructor when `options.maxSizeBytes` is undefined and `skipLocal` is false, naming the risk and how to bound it (FR-001) in src/cache/cached-store.ts
-- [ ] T007 [US1] Update the README "Caching" section: document LRU eviction behavior, the unbounded-growth risk, and cache-sizing guidance (FR-004) in README.md
+- [X] T006 [US1] Emit a one-time `console.warn` in the `CachedStore` constructor when `options.maxSizeBytes` is undefined and `skipLocal` is false, naming the risk and how to bound it (FR-001) in src/cache/cached-store.ts
+- [X] T007 [US1] Update the README "Caching" section: document LRU eviction behavior, the unbounded-growth risk, and cache-sizing guidance (FR-004) in README.md
 
 **Checkpoint**: US1 fully functional and independently testable — MVP deliverable.
 

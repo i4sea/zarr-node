@@ -11,7 +11,7 @@ const store = new CachedStore(new S3Store({ bucket, prefix, region }), {
   cacheDir: "/tmp/zarr-cache",
   maxSizeBytes: 2 * 1024 * 1024 * 1024, // 2 GiB — REQUIRED in production
 });
-// Omitting maxSizeBytes logs a one-time warning: the cache would grow unbounded.
+// Omitting maxSizeBytes logs a warning at construction: the cache would grow unbounded.
 ```
 
 ## 2. Shared metadata cache (Redis) across pods
@@ -109,7 +109,7 @@ maxInFlightBytes ≈ (podRamLimit − baselineHeap) × safetyFraction
 
 ## Validation checklist (maps to acceptance scenarios)
 
-- [ ] Construct `CachedStore` without `maxSizeBytes` → warning logged once (US1).
+- [ ] Construct `CachedStore` without `maxSizeBytes` → warning logged once per construction (US1).
 - [ ] Open same dataset twice with `metadataCache` → second open hits cache, no second store fetch (US2).
 - [ ] Library loads and reads with `ioredis` absent and no cache supplied (US2).
 - [ ] All seven hooks fire with documented payloads; throwing handler does not break read (US3).

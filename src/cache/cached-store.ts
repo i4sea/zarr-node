@@ -6,7 +6,7 @@ const METADATA_SUFFIXES = [".zarray", ".zattrs", ".zgroup", ".zmetadata"];
 export interface CacheOptions {
   /** Local directory for cached chunk files. Created if it doesn't exist. */
   cacheDir: string;
-  /** Time-to-live in seconds. Omit for no expiry. */
+  /** Time-to-live in seconds. Omit for no expiry; 0 expires immediately. */
   ttl?: number;
   /** Override auto-derived store identity string. */
   storeId?: string;
@@ -26,8 +26,17 @@ export class CachedStore implements Store {
     this.inner = inner;
     this.skipLocal = options.skipLocal ?? false;
 
+    if (options.maxSizeBytes == null && !this.skipLocal) {
+      console.warn(
+        `[zarr-node] CachedStore constructed without maxSizeBytes: the disk ` +
+          `cache at "${options.cacheDir}" will grow unbounded and may fill the ` +
+          `disk. Set maxSizeBytes (e.g. 10 * 1024 ** 3 for 10 GiB) to enable ` +
+          `size-based eviction.`,
+      );
+    }
+
     const storeId = options.storeId ?? deriveStoreId(inner);
-    const ttlMs = options.ttl ? options.ttl * 1000 : null;
+    const ttlMs = options.ttl !== undefined ? options.ttl * 1000 : null;
     const maxSizeBytes = options.maxSizeBytes ?? null;
     this.cache = new DiskCache(options.cacheDir, storeId, ttlMs, maxSizeBytes);
   }

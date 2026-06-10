@@ -21,8 +21,11 @@ export class DiskCache {
     ttlMs: number | null,
     maxSizeBytes: number | null = null,
   ) {
-    if (maxSizeBytes !== null && maxSizeBytes <= 0) {
-      throw new Error("DiskCache maxSizeBytes must be > 0");
+    if (
+      maxSizeBytes !== null &&
+      (!Number.isFinite(maxSizeBytes) || maxSizeBytes <= 0)
+    ) {
+      throw new Error("DiskCache maxSizeBytes must be a finite number > 0");
     }
     const hash = createHash("sha256")
       .update(storeId)

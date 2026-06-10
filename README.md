@@ -155,6 +155,7 @@ import { FileSystemStore, CachedStore, MemoryCache, open } from "@i4sea/zarr-nod
 const inner = new FileSystemStore("/path/to/zarr");
 const store = new CachedStore(inner, {
   cacheDir: "/tmp/zarr-cache",
+  storeId: "my-dataset", // stable cache identity across restarts
   maxSizeBytes: 500 * 1024 * 1024, // 500 MB limit
 });
 
@@ -163,6 +164,44 @@ const memCache = new MemoryCache({ maxBytes: 100 * 1024 * 1024 }); // 100 MB
 const array = await open(store);
 const data = await array.read(null, { memoryCache: memCache });
 ```
+
+#### Eviction and cache sizing
+
+After each write, `CachedStore` evicts the oldest entries by file modification
+time (least-recently-*written* — reads do not refresh an entry's eviction
+priority) so that store's cache stays at or below `maxSizeBytes`. A
+non-positive or non-finite `maxSizeBytes` is rejected at construction.
+
+The limit is scoped **per store**, not per directory: each `CachedStore` keeps
+its entries under `cacheDir/<hash(storeId)>` and evicts only there. Several
+stores sharing one `cacheDir` can therefore use up to N × `maxSizeBytes` in
+total. For stores without a derivable identity (anything other than S3/HTTP,
+e.g. `FileSystemStore`), pass an explicit `storeId` — otherwise a new cache
+subdirectory is created on every process start and stale ones are never
+evicted.
+
+**Unbounded-growth risk**: `maxSizeBytes` is optional. Without it, nothing is
+ever evicted — every chunk fetched from the inner store is written to
+`cacheDir` and stays there, so sustained reads over a large dataset will
+eventually fill the disk (or the pod's ephemeral-storage limit, evicting the
+pod). Constructing a `CachedStore` without `maxSizeBytes` logs a
+`console.warn` for this reason; only omit it when the working set is known to
+fit on disk.
+
+**Sizing guidance**:
+
+- Size for the *hot* working set, not the whole dataset — e.g. the chunks
+  covering the time window and variables your queries actually touch.
+- Leave headroom on the volume: eviction runs after each chunk is written and
+  reads fetch chunks concurrently (default concurrency 50), so usage can
+  transiently exceed `maxSizeBytes` by roughly the read concurrency × chunk
+  size before settling back under the limit.
+- In Kubernetes, keep `maxSizeBytes` (plus the headroom above) comfortably
+  below the container's `ephemeral-storage` limit (or mount a dedicated volume
+  for `cacheDir`).
+- Too small a limit causes thrashing (chunks are evicted and re-fetched
+  repeatedly); if the hit rate is low, grow the limit or narrow the access
+  pattern.
 
 ### Reference filesystem (kerchunk)
 

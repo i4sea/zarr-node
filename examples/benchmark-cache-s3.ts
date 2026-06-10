@@ -20,7 +20,7 @@ async function main() {
     prefix: "my-data.zarr",
     region: "us-east-1",
   });
-  const store = new CachedStore(s3, { cacheDir, storeId: "wrf-benchmark" });
+  const store = new CachedStore(s3, { cacheDir, storeId: "wrf-benchmark", maxSizeBytes: 1024 ** 3 });
 
   console.log("=== WRF S3 + Disk Cache Benchmark ===\n");
 
