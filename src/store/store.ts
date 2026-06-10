@@ -18,9 +18,12 @@ export interface FileSystemStoreOptions {
 
 export interface HTTPStoreOptions {
   url: string;
+  /** Per-request timeout in milliseconds. Default 30000. */
   timeout?: number;
   headers?: Record<string, string>;
-  /** Per-instance observability hooks (`onStoreFetch`). */
+  /** Max retries after the initial attempt for transient failures. Default 3. */
+  maxRetries?: number;
+  /** Per-instance observability hooks (`onStoreFetch`, `onRetry`). */
   observability?: ObservabilityHooks;
 }
 
@@ -29,6 +32,10 @@ export interface S3StoreOptions {
   prefix?: string;
   region?: string;
   endpoint?: string;
-  /** Per-instance observability hooks (`onStoreFetch`). */
+  /** Max retries after the initial attempt for transient failures. Default 3. */
+  maxRetries?: number;
+  /** Per-operation timeout in milliseconds (aborts `client.send`). Default 30000. */
+  timeout?: number;
+  /** Per-instance observability hooks (`onStoreFetch`, `onRetry`). */
   observability?: ObservabilityHooks;
 }

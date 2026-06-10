@@ -117,14 +117,14 @@ Single-library layout: `src/`, `tests/` at repository root (per plan.md).
 
 ### Tests for User Story 4 (write first, confirm failing) ⚠️
 
-- [ ] T026 [P] [US4] Unit tests for the retry policy: retryable status `{429,500,502,503,504}` and network codes `{ECONNRESET,ETIMEDOUT,EAI_AGAIN}` classify as retryable; 404 does not; `fullJitterDelay(attempt, base)` ∈ `[0, min(cap, base·2^attempt)]`; attempts bounded by `maxRetries` in tests/unit/retry.test.ts
-- [ ] T027 [P] [US4] Integration tests: transient failure then success returns data; `maxRetries`/`timeout` overrides honored; S3 operation exceeding `timeout` aborts; `onRetry` fires per attempt in tests/integration/http.test.ts and tests/integration/s3.test.ts
+- [X] T026 [P] [US4] Unit tests for the retry policy: retryable status `{429,500,502,503,504}` and network codes `{ECONNRESET,ETIMEDOUT,EAI_AGAIN}` classify as retryable; 404 does not; `fullJitterDelay(attempt, base)` ∈ `[0, min(cap, base·2^attempt)]`; attempts bounded by `maxRetries` in tests/unit/retry.test.ts
+- [X] T027 [P] [US4] Integration tests: transient failure then success returns data; `maxRetries`/`timeout` overrides honored; S3 operation exceeding `timeout` aborts; `onRetry` fires per attempt in tests/integration/http.test.ts and tests/integration/s3.test.ts
 
 ### Implementation for User Story 4
 
-- [ ] T028 [P] [US4] Create src/store/retry.ts: retryable-status set, retryable network-error codes (+ S3 SDK names `ThrottlingException`/`SlowDown`/`TimeoutError`), `fullJitterDelay`, `RetryConfig { maxRetries; timeoutMs }` with defaults (3 retries, 30000ms), and an `isRetryable`/`classify` helper
-- [ ] T029 [US4] Add `maxRetries?` to `HTTPStoreOptions` (src/store/store.ts) and refactor `HTTPStore.fetchWithRetry` to use src/store/retry.ts: expanded retryable set, network-error detection via `err.cause?.code`, full-jitter backoff, configurable `maxRetries`, and `onRetry` firing in src/store/http.ts
-- [ ] T030 [US4] Add `maxRetries?`/`timeout?` to `S3StoreOptions` (src/store/store.ts) and refactor `S3Store.get`/`getRange` to use src/store/retry.ts: explicit per-op timeout via `abortSignal: AbortSignal.timeout(timeoutMs)` on `client.send`, expanded retryable classification, full-jitter backoff, configurable `maxRetries`, and `onRetry` firing in src/store/s3.ts
+- [X] T028 [P] [US4] Create src/store/retry.ts: retryable-status set, retryable network-error codes (+ S3 SDK names `ThrottlingException`/`SlowDown`/`TimeoutError`), `fullJitterDelay`, `RetryConfig { maxRetries; timeoutMs }` with defaults (3 retries, 30000ms), and an `isRetryable`/`classify` helper
+- [X] T029 [US4] Add `maxRetries?` to `HTTPStoreOptions` (src/store/store.ts) and refactor `HTTPStore.fetchWithRetry` to use src/store/retry.ts: expanded retryable set, network-error detection via `err.cause?.code`, full-jitter backoff, configurable `maxRetries`, and `onRetry` firing in src/store/http.ts
+- [X] T030 [US4] Add `maxRetries?`/`timeout?` to `S3StoreOptions` (src/store/store.ts) and refactor `S3Store.get`/`getRange` to use src/store/retry.ts: explicit per-op timeout via `abortSignal: AbortSignal.timeout(timeoutMs)` on `client.send`, expanded retryable classification, full-jitter backoff, configurable `maxRetries`, and `onRetry` firing in src/store/s3.ts
 
 **Checkpoint**: US1–US4 independently functional.
 

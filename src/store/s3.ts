@@ -1,10 +1,13 @@
 import { StoreError } from "../errors.js";
 import type { ObservabilityHooks } from "../observability.js";
 import { safeInvoke } from "../observability.js";
+import {
+  DEFAULT_RETRY_CONFIG,
+  RetryExhaustedError,
+  executeWithRetry,
+  isRetryable,
+} from "./retry.js";
 import type { Store, S3StoreOptions } from "./store.js";
-
-const MAX_RETRIES = 3;
-const BASE_DELAY_MS = 100;
 
 // Dynamic import helper — @aws-sdk/client-s3 is an optional peer dependency
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -26,6 +29,8 @@ export class S3Store implements Store {
   private readonly prefix: string;
   private readonly region?: string;
   private readonly endpoint?: string;
+  private readonly maxRetries: number;
+  private readonly timeout: number;
   private readonly hooks?: ObservabilityHooks;
   private clientPromise: Promise<S3Client> | null = null;
 
@@ -34,59 +39,45 @@ export class S3Store implements Store {
     this.prefix = options.prefix?.replace(/\/+$/, "") ?? "";
     this.region = options.region;
     this.endpoint = options.endpoint;
+    this.maxRetries = options.maxRetries ?? DEFAULT_RETRY_CONFIG.maxRetries;
+    this.timeout = options.timeout ?? DEFAULT_RETRY_CONFIG.timeoutMs;
     this.hooks = options.observability;
   }
 
   async get(key: string): Promise<Uint8Array | null> {
-    const client = await this.getClient();
     const fullKey = this.resolveKey(key);
-    // Timer spans every attempt plus backoff, matching HTTPStore semantics.
-    const start = this.hooks?.onStoreFetch ? performance.now() : 0;
-
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        const sdk = await loadS3SDK();
-        const response = await client.send(
-          new sdk.GetObjectCommand({ Bucket: this.bucket, Key: fullKey }),
-        );
-        const body = response.Body;
-        if (!body) return null;
-        const bytes = await body.transformToByteArray();
-        if (this.hooks?.onStoreFetch) {
-          safeInvoke(this.hooks.onStoreFetch, {
-            key,
-            bytes: bytes.byteLength,
-            latencyMs: performance.now() - start,
-          });
-        }
-        return new Uint8Array(bytes);
-      } catch (err) {
-        if (isNotFound(err)) return null;
-        if (isRetryable(err) && attempt < MAX_RETRIES) {
-          await delay(BASE_DELAY_MS * Math.pow(2, attempt));
-          continue;
-        }
-        throw new StoreError(
-          `S3 GET s3://${this.bucket}/${fullKey} failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
-
-    return null;
+    return this.getObject(
+      key,
+      { Bucket: this.bucket, Key: fullKey },
+      `S3 GET s3://${this.bucket}/${fullKey}`,
+    );
   }
 
   async has(key: string): Promise<boolean> {
     const client = await this.getClient();
     const fullKey = this.resolveKey(key);
+    const onRetry = this.hooks?.onRetry;
 
     try {
-      const sdk = await loadS3SDK();
-      await client.send(
-        new sdk.HeadObjectCommand({ Bucket: this.bucket, Key: fullKey }),
+      await executeWithRetry(
+        async () => {
+          const sdk = await loadS3SDK();
+          await client.send(
+            new sdk.HeadObjectCommand({ Bucket: this.bucket, Key: fullKey }),
+            { abortSignal: AbortSignal.timeout(this.timeout) },
+          );
+        },
+        {
+          maxRetries: this.maxRetries,
+          onRetry: onRetry ? (e) => safeInvoke(onRetry, e) : undefined,
+        },
       );
       return true;
     } catch (err) {
       if (isNotFound(err)) return false;
+      if (err instanceof RetryExhaustedError) {
+        throw new StoreError(`S3 HEAD s3://${this.bucket}/${fullKey} ${err.message}`);
+      }
       throw new StoreError(
         `S3 HEAD s3://${this.bucket}/${fullKey} failed: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -98,46 +89,17 @@ export class S3Store implements Store {
     offset: number,
     length: number,
   ): Promise<Uint8Array | null> {
-    const client = await this.getClient();
     const fullKey = this.resolveKey(key);
     const end = offset + length - 1;
-    // Timer spans every attempt plus backoff, matching HTTPStore semantics.
-    const start = this.hooks?.onStoreFetch ? performance.now() : 0;
-
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        const sdk = await loadS3SDK();
-        const response = await client.send(
-          new sdk.GetObjectCommand({
-            Bucket: this.bucket,
-            Key: fullKey,
-            Range: `bytes=${offset}-${end}`,
-          }),
-        );
-        const body = response.Body;
-        if (!body) return null;
-        const bytes = await body.transformToByteArray();
-        if (this.hooks?.onStoreFetch) {
-          safeInvoke(this.hooks.onStoreFetch, {
-            key,
-            bytes: bytes.byteLength,
-            latencyMs: performance.now() - start,
-          });
-        }
-        return new Uint8Array(bytes);
-      } catch (err) {
-        if (isNotFound(err)) return null;
-        if (isRetryable(err) && attempt < MAX_RETRIES) {
-          await delay(BASE_DELAY_MS * Math.pow(2, attempt));
-          continue;
-        }
-        throw new StoreError(
-          `S3 GET s3://${this.bucket}/${fullKey} (range) failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
-
-    return null;
+    return this.getObject(
+      key,
+      {
+        Bucket: this.bucket,
+        Key: fullKey,
+        Range: `bytes=${offset}-${end}`,
+      },
+      `S3 GET s3://${this.bucket}/${fullKey} (range)`,
+    );
   }
 
   async *list(prefix: string): AsyncIterable<string> {
@@ -145,16 +107,29 @@ export class S3Store implements Store {
     const fullPrefix = this.prefix ? `${this.prefix}/${prefix}` : prefix;
 
     const sdk = await loadS3SDK();
+    const onRetry = this.hooks?.onRetry;
     let continuationToken: string | undefined;
 
     do {
-      const response = await client.send(
-        new sdk.ListObjectsV2Command({
-          Bucket: this.bucket,
-          Prefix: fullPrefix,
-          ContinuationToken: continuationToken,
-        }),
-      );
+      const token = continuationToken;
+      const response = (await executeWithRetry(
+        () =>
+          client.send(
+            new sdk.ListObjectsV2Command({
+              Bucket: this.bucket,
+              Prefix: fullPrefix,
+              ContinuationToken: token,
+            }),
+            { abortSignal: AbortSignal.timeout(this.timeout) },
+          ) as Promise<unknown>,
+        {
+          maxRetries: this.maxRetries,
+          onRetry: onRetry ? (e) => safeInvoke(onRetry, e) : undefined,
+        },
+      )) as {
+        Contents?: { Key?: string }[];
+        NextContinuationToken?: string;
+      };
 
       for (const obj of response.Contents ?? []) {
         if (obj.Key) {
@@ -167,6 +142,58 @@ export class S3Store implements Store {
 
       continuationToken = response.NextContinuationToken;
     } while (continuationToken);
+  }
+
+  /**
+   * GetObject with the shared retry policy: full-jitter backoff, expanded
+   * retryable classification, and an explicit per-attempt timeout via
+   * `AbortSignal.timeout` on `client.send`.
+   */
+  private async getObject(
+    key: string,
+    commandInput: { Bucket: string; Key: string; Range?: string },
+    describeOp: string,
+  ): Promise<Uint8Array | null> {
+    const client = await this.getClient();
+    // Timer spans every attempt plus backoff, matching HTTPStore semantics.
+    const start = this.hooks?.onStoreFetch ? performance.now() : 0;
+    const onRetry = this.hooks?.onRetry;
+
+    try {
+      return await executeWithRetry(
+        async () => {
+          const sdk = await loadS3SDK();
+          const response = await client.send(
+            new sdk.GetObjectCommand(commandInput),
+            { abortSignal: AbortSignal.timeout(this.timeout) },
+          );
+          const body = response.Body;
+          if (!body) return null;
+          const bytes = await body.transformToByteArray();
+          if (this.hooks?.onStoreFetch) {
+            safeInvoke(this.hooks.onStoreFetch, {
+              key,
+              bytes: bytes.byteLength,
+              latencyMs: performance.now() - start,
+            });
+          }
+          return new Uint8Array(bytes);
+        },
+        {
+          maxRetries: this.maxRetries,
+          isRetryable,
+          onRetry: onRetry ? (e) => safeInvoke(onRetry, e) : undefined,
+        },
+      );
+    } catch (err) {
+      if (isNotFound(err)) return null;
+      if (err instanceof RetryExhaustedError) {
+        throw new StoreError(`${describeOp} ${err.message}`);
+      }
+      throw new StoreError(
+        `${describeOp} failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   private resolveKey(key: string): string {
@@ -184,6 +211,11 @@ export class S3Store implements Store {
     const sdk = await loadS3SDK();
     return new sdk.S3Client({
       region: this.region,
+      // The store's own retry policy (executeWithRetry) is the single retry
+      // layer — the SDK's internal retry (default maxAttempts 3) would
+      // multiply with it (up to maxAttempts × (maxRetries+1) requests) and
+      // make the documented maxRetries option meaningless.
+      maxAttempts: 1,
       ...(this.endpoint
         ? {
             endpoint: this.endpoint,
@@ -197,27 +229,13 @@ export class S3Store implements Store {
 function isNotFound(err: unknown): boolean {
   if (err && typeof err === "object" && "name" in err) {
     const name = (err as { name: string }).name;
-    return name === "NoSuchKey" || name === "NotFound" || name === "404";
+    if (name === "NoSuchKey" || name === "NotFound" || name === "404") {
+      return true;
+    }
   }
   if (err && typeof err === "object" && "$metadata" in err) {
     const meta = (err as { $metadata: { httpStatusCode?: number } }).$metadata;
     return meta.httpStatusCode === 404;
   }
   return false;
-}
-
-function isRetryable(err: unknown): boolean {
-  if (err && typeof err === "object" && "$metadata" in err) {
-    const meta = (err as { $metadata: { httpStatusCode?: number } }).$metadata;
-    return meta.httpStatusCode === 429 || meta.httpStatusCode === 503;
-  }
-  if (err && typeof err === "object" && "name" in err) {
-    const name = (err as { name: string }).name;
-    return name === "ThrottlingException" || name === "SlowDown";
-  }
-  return false;
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
