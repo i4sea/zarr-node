@@ -66,10 +66,13 @@ describe("retry policy — retryable classification", () => {
     // "TimeoutError" with numeric code 23.
     const err = Object.assign(new Error("Request aborted"), {
       name: "AbortError",
-      cause: Object.assign(new Error("The operation was aborted due to timeout"), {
-        name: "TimeoutError",
-        code: 23,
-      }),
+      cause: Object.assign(
+        new Error("The operation was aborted due to timeout"),
+        {
+          name: "TimeoutError",
+          code: 23,
+        },
+      ),
     });
     expect(isRetryable(err)).toBe(true);
   });

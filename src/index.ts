@@ -95,7 +95,7 @@ function resolveMetaContext(
     throw new StoreError(
       "metadataCache requires a deterministic store identity, but none could " +
         "be derived from this store type. Pass an explicit storeId in " +
-        "OpenOptions (e.g. open(store, path, { metadataCache, storeId: \"my-dataset\" })).",
+        'OpenOptions (e.g. open(store, path, { metadataCache, storeId: "my-dataset" })).',
     );
   }
   return {

@@ -28,7 +28,9 @@ describe("deriveStoreId", () => {
     const idProd = deriveStoreId(prod);
     expect(idStaging).not.toBeNull();
     expect(idStaging).not.toBe(idProd);
-    expect(idStaging).not.toBe(deriveStoreId(new S3Store({ bucket: "data", prefix: "ds" })));
+    expect(idStaging).not.toBe(
+      deriveStoreId(new S3Store({ bucket: "data", prefix: "ds" })),
+    );
   });
 
   it("derives the base URL for HTTP stores", () => {

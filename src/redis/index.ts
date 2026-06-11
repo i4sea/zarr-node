@@ -7,12 +7,7 @@ export type { Cache } from "../cache/cache.js";
 // a pre-configured ioredis client can be passed without importing its types.
 export interface RedisClientLike {
   getBuffer(key: string): Promise<Buffer | null>;
-  set(
-    key: string,
-    value: Buffer,
-    px?: "PX",
-    ttlMs?: number,
-  ): Promise<unknown>;
+  set(key: string, value: Buffer, px?: "PX", ttlMs?: number): Promise<unknown>;
   exists(key: string): Promise<number>;
 }
 

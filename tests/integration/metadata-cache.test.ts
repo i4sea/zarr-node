@@ -3,7 +3,13 @@ import { join } from "node:path";
 import { FileSystemStore } from "../../src/store/filesystem.js";
 import { InMemoryCache } from "../../src/cache/memory.js";
 import type { Cache } from "../../src/cache/cache.js";
-import { open, openGroup, openArray, ZarrArray, ZarrGroup } from "../../src/index.js";
+import {
+  open,
+  openGroup,
+  openArray,
+  ZarrArray,
+  ZarrGroup,
+} from "../../src/index.js";
 import type { Store } from "../../src/store/store.js";
 import type { ObservabilityHooks } from "../../src/observability.js";
 
@@ -151,8 +157,14 @@ describe("Metadata cache — repeated open is served from cache (T010, SC-002)",
     const storeA = fixtureStore("simple_1d");
     const storeB = fixtureStore("chunked_2d");
 
-    await openArray(storeA, undefined, { metadataCache: cache, storeId: "ds-a" });
-    await openArray(storeB, undefined, { metadataCache: cache, storeId: "ds-b" });
+    await openArray(storeA, undefined, {
+      metadataCache: cache,
+      storeId: "ds-a",
+    });
+    await openArray(storeB, undefined, {
+      metadataCache: cache,
+      storeId: "ds-b",
+    });
 
     // Second opens are cache-served — each must get its own metadata back
     const a = await openArray(storeA, undefined, {
@@ -188,9 +200,9 @@ describe("Metadata cache — store identity (FR-008a)", () => {
     const { store, counts } = countingStore(fixtureStore("simple_1d"));
     const cache = new InMemoryCache({ maxBytes: 1024 });
 
-    await expect(open(store, undefined, { metadataCache: cache })).rejects.toThrow(
-      /storeId/,
-    );
+    await expect(
+      open(store, undefined, { metadataCache: cache }),
+    ).rejects.toThrow(/storeId/);
     await expect(
       openArray(store, undefined, { metadataCache: cache }),
     ).rejects.toThrow(/storeId/);

@@ -38,7 +38,11 @@ describe("CachedStore — basic caching (US1)", () => {
       },
     };
 
-    const cached = new CachedStore(counting, { cacheDir, storeId: "test", maxSizeBytes: 64 * 1024 * 1024 });
+    const cached = new CachedStore(counting, {
+      cacheDir,
+      storeId: "test",
+      maxSizeBytes: 64 * 1024 * 1024,
+    });
     const arr = await openArray(cached);
 
     // First read — fetches chunk "0" from store
@@ -60,7 +64,11 @@ describe("CachedStore — basic caching (US1)", () => {
 
   it("metadata keys are NOT cached", async () => {
     const inner = new FileSystemStore({ path: join(FIXTURES, "simple_1d") });
-    const cached = new CachedStore(inner, { cacheDir, storeId: "test", maxSizeBytes: 64 * 1024 * 1024 });
+    const cached = new CachedStore(inner, {
+      cacheDir,
+      storeId: "test",
+      maxSizeBytes: 64 * 1024 * 1024,
+    });
 
     // Trigger metadata + chunk read
     await openArray(cached);
@@ -79,7 +87,11 @@ describe("CachedStore — basic caching (US1)", () => {
 
   it("cache hit is fast (< 10ms)", async () => {
     const inner = new FileSystemStore({ path: join(FIXTURES, "simple_1d") });
-    const cached = new CachedStore(inner, { cacheDir, storeId: "test", maxSizeBytes: 64 * 1024 * 1024 });
+    const cached = new CachedStore(inner, {
+      cacheDir,
+      storeId: "test",
+      maxSizeBytes: 64 * 1024 * 1024,
+    });
     const arr = await openArray(cached);
 
     // Populate cache
@@ -130,7 +142,11 @@ describe("CachedStore — opt-in behavior (US2)", () => {
 
   it("cache files mirror key hierarchy", async () => {
     const inner = new FileSystemStore({ path: join(FIXTURES, "chunked_2d") });
-    const cached = new CachedStore(inner, { cacheDir, storeId: "test", maxSizeBytes: 64 * 1024 * 1024 });
+    const cached = new CachedStore(inner, {
+      cacheDir,
+      storeId: "test",
+      maxSizeBytes: 64 * 1024 * 1024,
+    });
     const arr = await openArray(cached);
     await arr.get([
       [0, 1],
@@ -161,7 +177,11 @@ describe("CachedStore — TTL (US3)", () => {
 
   it("clearCache() removes all entries", async () => {
     const inner = new FileSystemStore({ path: join(FIXTURES, "simple_1d") });
-    const cached = new CachedStore(inner, { cacheDir, storeId: "test", maxSizeBytes: 64 * 1024 * 1024 });
+    const cached = new CachedStore(inner, {
+      cacheDir,
+      storeId: "test",
+      maxSizeBytes: 64 * 1024 * 1024,
+    });
     const arr = await openArray(cached);
     await arr.get();
 
@@ -182,7 +202,11 @@ describe("CachedStore — cross-session (US4)", () => {
     const inner = new FileSystemStore({ path: join(FIXTURES, "simple_1d") });
 
     // Session 1: populate cache
-    const cached1 = new CachedStore(inner, { cacheDir, storeId: "test", maxSizeBytes: 64 * 1024 * 1024 });
+    const cached1 = new CachedStore(inner, {
+      cacheDir,
+      storeId: "test",
+      maxSizeBytes: 64 * 1024 * 1024,
+    });
     await (await openArray(cached1)).get();
 
     // Session 2: new CachedStore, same cacheDir
@@ -199,7 +223,11 @@ describe("CachedStore — cross-session (US4)", () => {
         yield* inner.list(prefix);
       },
     };
-    const cached2 = new CachedStore(counting, { cacheDir, storeId: "test", maxSizeBytes: 64 * 1024 * 1024 });
+    const cached2 = new CachedStore(counting, {
+      cacheDir,
+      storeId: "test",
+      maxSizeBytes: 64 * 1024 * 1024,
+    });
     fetchCount = 0;
 
     // Read chunk — should come from cache, not counting store

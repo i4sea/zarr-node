@@ -33,9 +33,13 @@ describe("readMultiple", () => {
     const root = await openGroup(store);
 
     const readings: number[] = [];
-    const results = await root.readMultiple(["temperature", "wind"], undefined, {
-      observability: { onInFlightBytes: (current) => readings.push(current) },
-    });
+    const results = await root.readMultiple(
+      ["temperature", "wind"],
+      undefined,
+      {
+        observability: { onInFlightBytes: (current) => readings.push(current) },
+      },
+    );
 
     expect(results.size).toBe(2);
     expect(readings.length).toBeGreaterThan(0);

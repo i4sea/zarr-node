@@ -42,7 +42,10 @@ describe("InMemoryCache — adapter behavior", () => {
     // maxBytes (by key size) or an absent-only workload never evicts.
     const cache = new InMemoryCache({ maxBytes: 1024 });
     for (let i = 0; i < 500; i++) {
-      await cache.set(`store-id:path/to/missing-${i}/.zarray`, new Uint8Array(0));
+      await cache.set(
+        `store-id:path/to/missing-${i}/.zarray`,
+        new Uint8Array(0),
+      );
     }
     const lru = (
       cache as unknown as { lru: { size: number; totalBytes: number } }
@@ -79,12 +82,12 @@ describe("scopeKey — store-identity scoping", () => {
     await cache.set(scopeKey("dataset-a", ".zarray"), metaA);
     await cache.set(scopeKey("dataset-b", ".zarray"), metaB);
 
-    expect(Array.from((await cache.get(scopeKey("dataset-a", ".zarray")))!)).toEqual(
-      Array.from(metaA),
-    );
-    expect(Array.from((await cache.get(scopeKey("dataset-b", ".zarray")))!)).toEqual(
-      Array.from(metaB),
-    );
+    expect(
+      Array.from((await cache.get(scopeKey("dataset-a", ".zarray")))!),
+    ).toEqual(Array.from(metaA));
+    expect(
+      Array.from((await cache.get(scopeKey("dataset-b", ".zarray")))!),
+    ).toEqual(Array.from(metaB));
     expect(await cache.get(scopeKey("dataset-c", ".zarray"))).toBeNull();
   });
 });

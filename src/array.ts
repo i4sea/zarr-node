@@ -239,8 +239,7 @@ export class ZarrArray {
   }
 
   private async getFull(ctx: ResolvedReadContext): Promise<TypedArray> {
-    const { concurrency, memoryCache, limiter, warnBytes, hooks, strict } =
-      ctx;
+    const { concurrency, memoryCache, limiter, warnBytes, hooks, strict } = ctx;
     const ndim = this.shape.length;
     const ranges = computeChunkRanges(this.shape, this.chunks);
     const byteSize = dtypeByteSize(this.dtype);
@@ -351,8 +350,7 @@ export class ZarrArray {
     selection: Slice,
     ctx: ResolvedReadContext,
   ): Promise<TypedArray> {
-    const { concurrency, memoryCache, limiter, warnBytes, hooks, strict } =
-      ctx;
+    const { concurrency, memoryCache, limiter, warnBytes, hooks, strict } = ctx;
     const ndim = this.shape.length;
     const ranges = normalizeSelection(selection, this.shape);
     const byteSize = dtypeByteSize(this.dtype);

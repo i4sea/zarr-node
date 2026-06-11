@@ -76,7 +76,9 @@ export class S3Store implements Store {
     } catch (err) {
       if (isNotFound(err)) return false;
       if (err instanceof RetryExhaustedError) {
-        throw new StoreError(`S3 HEAD s3://${this.bucket}/${fullKey} ${err.message}`);
+        throw new StoreError(
+          `S3 HEAD s3://${this.bucket}/${fullKey} ${err.message}`,
+        );
       }
       throw new StoreError(
         `S3 HEAD s3://${this.bucket}/${fullKey} failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -171,7 +173,9 @@ export class S3Store implements Store {
           if (!body) {
             // A 2xx GetObject with no body is an anomalous response, not a
             // missing key — null is reserved for "key absent" (Store contract).
-            throw new StoreError(`${describeOp} succeeded but returned no body`);
+            throw new StoreError(
+              `${describeOp} succeeded but returned no body`,
+            );
           }
           const bytes = await body.transformToByteArray();
           if (this.hooks?.onStoreFetch) {

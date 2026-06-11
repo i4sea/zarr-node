@@ -18,7 +18,10 @@ const REDIS_URL = process.env.REDIS_URL;
  * contract run without a live server.
  */
 function fakeIoredisClient() {
-  const entries = new Map<string, { value: Buffer; expiresAt: number | null }>();
+  const entries = new Map<
+    string,
+    { value: Buffer; expiresAt: number | null }
+  >();
   const live = (key: string): Buffer | null => {
     const entry = entries.get(key);
     if (!entry) return null;

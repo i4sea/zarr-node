@@ -202,53 +202,51 @@ describe("S3Store — retry and timeout (local fake S3)", () => {
     process.env.AWS_SECRET_ACCESS_KEY ??= "test-secret-key";
 
     await new Promise<void>((resolve) => {
-      fakeS3 = createServer(
-        (req: IncomingMessage, res: ServerResponse) => {
-          const urlPath = req.url ?? "/";
+      fakeS3 = createServer((req: IncomingMessage, res: ServerResponse) => {
+        const urlPath = req.url ?? "/";
 
-          if (urlPath.includes("transient-key")) {
-            const count = transientCounter++;
-            if (count < 2) {
-              res.writeHead(500, { "Content-Type": "application/xml" });
-              res.end(
-                '<?xml version="1.0"?><Error><Code>InternalError</Code><Message>We encountered an internal error.</Message></Error>',
-              );
-              return;
-            }
-            res.writeHead(200, { "Content-Type": "application/octet-stream" });
-            res.end(Buffer.from([7, 8, 9]));
-            return;
-          }
-
-          if (urlPath.includes("always-500-key")) {
-            always500Counter++;
+        if (urlPath.includes("transient-key")) {
+          const count = transientCounter++;
+          if (count < 2) {
             res.writeHead(500, { "Content-Type": "application/xml" });
             res.end(
               '<?xml version="1.0"?><Error><Code>InternalError</Code><Message>We encountered an internal error.</Message></Error>',
             );
             return;
           }
+          res.writeHead(200, { "Content-Type": "application/octet-stream" });
+          res.end(Buffer.from([7, 8, 9]));
+          return;
+        }
 
-          if (urlPath.includes("missing-key")) {
-            notFoundCounter++;
-            res.writeHead(404, { "Content-Type": "application/xml" });
-            res.end(
-              '<?xml version="1.0"?><Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message></Error>',
-            );
-            return;
-          }
+        if (urlPath.includes("always-500-key")) {
+          always500Counter++;
+          res.writeHead(500, { "Content-Type": "application/xml" });
+          res.end(
+            '<?xml version="1.0"?><Error><Code>InternalError</Code><Message>We encountered an internal error.</Message></Error>',
+          );
+          return;
+        }
 
-          if (urlPath.includes("hang-key")) {
-            // Never respond — exercises the per-operation timeout abort
-            return;
-          }
-
+        if (urlPath.includes("missing-key")) {
+          notFoundCounter++;
           res.writeHead(404, { "Content-Type": "application/xml" });
           res.end(
             '<?xml version="1.0"?><Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message></Error>',
           );
-        },
-      );
+          return;
+        }
+
+        if (urlPath.includes("hang-key")) {
+          // Never respond — exercises the per-operation timeout abort
+          return;
+        }
+
+        res.writeHead(404, { "Content-Type": "application/xml" });
+        res.end(
+          '<?xml version="1.0"?><Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message></Error>',
+        );
+      });
       fakeS3.listen(0, "127.0.0.1", () => {
         const addr = fakeS3.address();
         if (addr && typeof addr !== "string") {
