@@ -154,11 +154,11 @@ Single-library layout: `src/`, `tests/` at repository root (per plan.md).
 
 **Purpose**: Documentation, release metadata, and full validation across stories.
 
-- [ ] T035 [P] Add the peak-memory formula (`peakPerChunk = chunkBytes × (decodeFactor + byteSwapFactor)`) and how to derive `maxInFlightBytes` from a pod RAM limit (FR-028) to README.md
-- [ ] T036 [P] Add README usage for the Redis metadata cache and observability hooks (mirroring quickstart.md) to README.md
-- [ ] T037 Add a changeset, bump version `0.4.0` → `0.5.0`, and add a CHANGELOG entry covering all five tracks (note the unbounded disk-cache warning is a new warning, not a behavior break; note the disk-cache identity change for unrecognized stores from T014 — operational cache-bust on deploy, research.md D3) in package.json + changeset/CHANGELOG
-- [ ] T038 Run full validation: `npm test && npm run lint && npm run typecheck && npm run build && npm run test:cjs && npm run test:esm`
-- [ ] T039 Execute the quickstart.md validation checklist end-to-end (all six story validations)
+- [X] T035 [P] Add the peak-memory formula (`peakPerChunk = chunkBytes × (decodeFactor + byteSwapFactor)`) and how to derive `maxInFlightBytes` from a pod RAM limit (FR-028) to README.md
+- [X] T036 [P] Add README usage for the Redis metadata cache and observability hooks (mirroring quickstart.md) to README.md
+- [X] T037 Add a changeset, bump version `0.4.0` → `0.5.0`, and add a CHANGELOG entry covering all five tracks (note the unbounded disk-cache warning is a new warning, not a behavior break; note the disk-cache identity change for unrecognized stores from T014 — operational cache-bust on deploy, research.md D3) in package.json + changeset/CHANGELOG
+- [X] T038 Run full validation: `npm test && npm run lint && npm run typecheck && npm run build && npm run test:cjs && npm run test:esm`
+- [X] T039 Execute the quickstart.md validation checklist end-to-end (all six story validations)
 
 ---
 

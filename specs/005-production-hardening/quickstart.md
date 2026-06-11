@@ -109,9 +109,9 @@ maxInFlightBytes ≈ (podRamLimit − baselineHeap) × safetyFraction
 
 ## Validation checklist (maps to acceptance scenarios)
 
-- [ ] Construct `CachedStore` without `maxSizeBytes` → warning logged once per construction (US1).
-- [ ] Open same dataset twice with `metadataCache` → second open hits cache, no second store fetch (US2).
-- [ ] Library loads and reads with `ioredis` absent and no cache supplied (US2).
-- [ ] All seven hooks fire with documented payloads; throwing handler does not break read (US3).
-- [ ] Injected 500/502/504 + ECONNRESET/ETIMEDOUT/EAI_AGAIN recover; backoff jittered; S3 timeout aborts (US4).
-- [ ] Missing chunk → notification + zeros by default; `strict` → `MissingChunkError` (US5).
+- [x] Construct `CachedStore` without `maxSizeBytes` → warning logged once per construction (US1).
+- [x] Open same dataset twice with `metadataCache` → second open hits cache, no second store fetch (US2).
+- [x] Library loads and reads with `ioredis` absent and no cache supplied (US2).
+- [x] All seven hooks fire with documented payloads; throwing handler does not break read (US3).
+- [x] Injected 500/502/504 + ECONNRESET/ETIMEDOUT/EAI_AGAIN recover; backoff jittered; S3 timeout aborts (US4).
+- [x] Missing chunk → notification + zeros by default; `strict` → `MissingChunkError` (US5).

@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-06-10
+
+Production hardening release. All new capabilities are opt-in; omitting the new options preserves current behavior.
+
+### Added
+
+- **Shared, pluggable metadata cache.** `open()` / `openGroup()` / `openArray()` accept `OpenOptions { metadataCache?, storeId?, observability? }`. Metadata reads (`.zmetadata`, `.zarray`, `.zgroup`, `.zattrs` — including child metadata via `ZarrGroup`) go through a read-through async `Cache` interface, cached without TTL. Ships `InMemoryCache` (root export) and `RedisCache` (`@i4sea/zarr-node/redis` subpath export, backed by the new optional `ioredis` peer dependency — accepts a pre-configured client or a connection URL). Keys are scoped `${storeId}:${key}`; the id derives automatically for `S3Store`/`HTTPStore`, and supplying `metadataCache` for a store with no derivable identity and no explicit `storeId` throws fast. Cache errors/unavailability fall back to the store.
+- **Observability hooks** (`ObservabilityHooks`, per-instance via option bags on stores, `CachedStore`, `open*`, and reads): `onCacheHit`/`onCacheMiss` (tiers `memory`/`disk`/`shared`), `onStoreFetch` (key/bytes/latencyMs), `onRetry`, `onChunkDecoded` (bytes/codec/decodeMs), `onInFlightBytes`, `onMissingChunk`. Throwing or rejecting handlers are swallowed; with no hooks registered there is zero dispatch/allocation overhead.
+- **Network resilience config.** Retryable conditions broadened to HTTP `429/500/502/503/504`, network codes `ECONNRESET`/`ETIMEDOUT`/`EAI_AGAIN`, and S3 SDK throttling errors, with full-jitter exponential backoff. `maxRetries` (default 3) is configurable on `HTTPStore` and `S3Store`; `S3Store` gains an explicit per-operation `timeout` (default 30000 ms) that aborts the in-flight request.
+- **Missing-chunk observability and strict mode.** A chunk absent from the store fires `onMissingChunk({ key })` and still zero-fills by default; `array.get(selection, { strict: true })` throws the new `MissingChunkError` instead of fabricating zeros.
+- **Unbounded disk-cache warning.** Constructing a `CachedStore` without `maxSizeBytes` now logs a one-time `console.warn` naming the unbounded-growth risk and how to bound it. This is a **new warning, not a behavior break** — caching behavior with or without a limit is unchanged.
+- README: peak-memory formula (`peakPerChunk = chunkBytes × (decodeFactor + byteSwapFactor)`) and guidance for deriving `maxInFlightBytes` from a pod RAM limit; usage docs for the Redis metadata cache and observability hooks; disk-cache eviction and sizing guidance.
+
+### Changed
+
+- **Disk-cache identity for unrecognized stores (operational cache-bust).** `deriveStoreId` moved to `src/store/identity.ts` and now returns a deterministic id or `null` instead of fabricating `store-${Date.now()}`. `CachedStore` keeps a per-process fallback id for stores without a derivable identity, but its format changed, so existing on-disk cache entries under old fallback ids are orphaned on deploy (they were already non-reusable across restarts, since the old fallback was also per-construction). S3/HTTP-backed disk caches are unaffected (same deterministic ids). Pass an explicit `storeId` to `CachedStore` for a stable, restart-surviving cache identity.
+
 ## [0.4.0] — 2026-06-02
 
 ### Added
