@@ -162,4 +162,116 @@ describe("Byte-range requests", () => {
     ]);
     expect(data.length).toBe(1);
   });
+
+  // Zarr v2 stores edge chunks padded to the full chunk shape: byte-range
+  // offsets must be computed against the stored (padded) layout, never the
+  // array-clipped one.
+  describe("edge chunks (stored padded to full chunk shape)", () => {
+    /**
+     * In-memory store for shape [4,10], chunks [4,8], <i4, C-order,
+     * uncompressed. value = row*10 + col; chunk padding bytes are 0x7f so any
+     * read that leaks padding is caught by value assertions.
+     */
+    function paddedStore(): {
+      store: Store;
+      rangeKeys: string[];
+      fullChunkGets: string[];
+    } {
+      const enc = new TextEncoder();
+      const zarray = enc.encode(
+        JSON.stringify({
+          shape: [4, 10],
+          chunks: [4, 8],
+          dtype: "<i4",
+          fill_value: 0,
+          order: "C",
+          filters: null,
+          dimension_separator: ".",
+          compressor: null,
+          zarr_format: 2,
+        }),
+      );
+
+      // Stored chunks are always full [4,8] (padded at the array edge).
+      const buildChunk = (colStart: number): Uint8Array => {
+        const data = new Int32Array(4 * 8).fill(0x7f7f7f7f);
+        for (let r = 0; r < 4; r++) {
+          for (let c = 0; c < 8; c++) {
+            const col = colStart + c;
+            if (col < 10) data[r * 8 + c] = r * 10 + col;
+          }
+        }
+        return new Uint8Array(data.buffer);
+      };
+
+      const entries = new Map<string, Uint8Array>([
+        [".zarray", zarray],
+        ["0.0", buildChunk(0)],
+        ["0.1", buildChunk(8)],
+      ]);
+
+      const rangeKeys: string[] = [];
+      const fullChunkGets: string[] = [];
+      const store: Store = {
+        async get(key: string) {
+          if (!key.startsWith(".z")) fullChunkGets.push(key);
+          return entries.get(key) ?? null;
+        },
+        async getRange(key: string, offset: number, length: number) {
+          rangeKeys.push(key);
+          const full = entries.get(key);
+          return full ? full.slice(offset, offset + length) : null;
+        },
+        async has(key: string) {
+          return entries.has(key);
+        },
+        async *list() {},
+      };
+      return { store, rangeKeys, fullChunkGets };
+    }
+
+    it("reads correct values from a trailing-dim-clipped edge chunk", async () => {
+      const { store, rangeKeys } = paddedStore();
+      const arr = await openArray(store);
+
+      // Slice cols 8..10 — entirely inside edge chunk 0.1 (stored width 8,
+      // logical width 2). Not contiguous in the padded layout → must NOT be
+      // read via byte range.
+      const data = await arr.get([null, [8, 10]]);
+
+      expect(Array.from(data)).toEqual([8, 9, 18, 19, 28, 29, 38, 39]);
+      expect(rangeKeys).not.toContain("0.1");
+    });
+
+    it("matches the full-fetch result across the whole array", async () => {
+      const { store } = paddedStore();
+      const arr = await openArray(store);
+
+      const data = await arr.get();
+
+      const expected: number[] = [];
+      for (let r = 0; r < 4; r++) {
+        for (let c = 0; c < 10; c++) expected.push(r * 10 + c);
+      }
+      expect(Array.from(data)).toEqual(expected);
+    });
+
+    it("still uses byte ranges for interior chunks of the same read", async () => {
+      const { store, rangeKeys, fullChunkGets } = paddedStore();
+      const arr = await openArray(store);
+
+      // Rows 1..3 across all columns: interior chunk 0.0 is contiguous
+      // (trailing dim full stored width) → byte range; edge chunk 0.1 falls
+      // back to a full fetch.
+      const data = await arr.get([[1, 3], null]);
+
+      const expected: number[] = [];
+      for (let r = 1; r < 3; r++) {
+        for (let c = 0; c < 10; c++) expected.push(r * 10 + c);
+      }
+      expect(Array.from(data)).toEqual(expected);
+      expect(rangeKeys).toContain("0.0");
+      expect(fullChunkGets).toContain("0.1");
+    });
+  });
 });

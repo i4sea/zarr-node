@@ -120,6 +120,69 @@ describe("Full pipeline: open -> read -> verify", () => {
     expect(data.length).toBe(10);
   });
 
+  describe("missing chunks filled with fill_value", () => {
+    /** Shape [4], chunks [2], <f4; chunk "0" present ([1, 2]), "1" absent. */
+    function sparseStore(fillValue: number | string | null): Store {
+      const enc = new TextEncoder();
+      const entries = new Map<string, Uint8Array>([
+        [
+          ".zarray",
+          enc.encode(
+            JSON.stringify({
+              shape: [4],
+              chunks: [2],
+              dtype: "<f4",
+              fill_value: fillValue,
+              order: "C",
+              filters: null,
+              dimension_separator: ".",
+              compressor: null,
+              zarr_format: 2,
+            }),
+          ),
+        ],
+        ["0", new Uint8Array(new Float32Array([1, 2]).buffer)],
+      ]);
+      return {
+        async get(key: string) {
+          return entries.get(key) ?? null;
+        },
+        async has(key: string) {
+          return entries.has(key);
+        },
+        async *list() {},
+      };
+    }
+
+    it("fills with a nonzero fill_value", async () => {
+      const arr = await openArray(sparseStore(-9999));
+      const data = await arr.get();
+      expect(Array.from(data)).toEqual([1, 2, -9999, -9999]);
+    });
+
+    it("fills with NaN fill_value", async () => {
+      const arr = await openArray(sparseStore("NaN"));
+      const data = await arr.get();
+      expect(Array.from(data.slice(0, 2))).toEqual([1, 2]);
+      expect(Number.isNaN(data[2])).toBe(true);
+      expect(Number.isNaN(data[3])).toBe(true);
+    });
+
+    it("fills slices overlapping a missing chunk", async () => {
+      const arr = await openArray(sparseStore(7));
+      const data = await arr.get([[1, 4]]);
+      expect(Array.from(data)).toEqual([2, 7, 7]);
+    });
+
+    it("keeps zero-fill for fill_value 0 and null", async () => {
+      for (const fv of [0, null]) {
+        const arr = await openArray(sparseStore(fv));
+        const data = await arr.get();
+        expect(Array.from(data)).toEqual([1, 2, 0, 0]);
+      }
+    });
+  });
+
   it("throws on invalid path", async () => {
     const store = new FileSystemStore({ path: "/nonexistent/path" });
     await expect(openArray(store)).rejects.toThrow();

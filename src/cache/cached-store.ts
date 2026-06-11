@@ -1,4 +1,7 @@
 import type { Store } from "../store/store.js";
+import { deriveStoreId } from "../store/identity.js";
+import type { ObservabilityHooks } from "../observability.js";
+import { safeInvoke } from "../observability.js";
 import { DiskCache } from "./disk.js";
 
 const METADATA_SUFFIXES = [".zarray", ".zattrs", ".zgroup", ".zmetadata"];
@@ -6,7 +9,7 @@ const METADATA_SUFFIXES = [".zarray", ".zattrs", ".zgroup", ".zmetadata"];
 export interface CacheOptions {
   /** Local directory for cached chunk files. Created if it doesn't exist. */
   cacheDir: string;
-  /** Time-to-live in seconds. Omit for no expiry. */
+  /** Time-to-live in seconds. Omit for no expiry; 0 expires immediately. */
   ttl?: number;
   /** Override auto-derived store identity string. */
   storeId?: string;
@@ -14,20 +17,34 @@ export interface CacheOptions {
   skipLocal?: boolean;
   /** Maximum total cache size in bytes. Oldest entries evicted when exceeded. */
   maxSizeBytes?: number;
+  /** Per-instance observability hooks (disk-tier `onCacheHit`/`onCacheMiss`). */
+  observability?: ObservabilityHooks;
 }
 
 export class CachedStore implements Store {
   private readonly inner: Store;
   private readonly cache: DiskCache;
   private readonly skipLocal: boolean;
+  private readonly hooks?: ObservabilityHooks;
   private readonly inflight = new Map<string, Promise<Uint8Array | null>>();
 
   constructor(inner: Store, options: CacheOptions) {
     this.inner = inner;
     this.skipLocal = options.skipLocal ?? false;
+    this.hooks = options.observability;
 
-    const storeId = options.storeId ?? deriveStoreId(inner);
-    const ttlMs = options.ttl ? options.ttl * 1000 : null;
+    if (options.maxSizeBytes == null && !this.skipLocal) {
+      console.warn(
+        `[zarr-node] CachedStore constructed without maxSizeBytes: the disk ` +
+          `cache at "${options.cacheDir}" will grow unbounded and may fill the ` +
+          `disk. Set maxSizeBytes (e.g. 10 * 1024 ** 3 for 10 GiB) to enable ` +
+          `size-based eviction.`,
+      );
+    }
+
+    const storeId =
+      options.storeId ?? deriveStoreId(inner) ?? fallbackStoreId();
+    const ttlMs = options.ttl !== undefined ? options.ttl * 1000 : null;
     const maxSizeBytes = options.maxSizeBytes ?? null;
     this.cache = new DiskCache(options.cacheDir, storeId, ttlMs, maxSizeBytes);
   }
@@ -46,7 +63,13 @@ export class CachedStore implements Store {
     // Check cache first
     const cached = await this.cache.get(key);
     if (cached !== null) {
+      if (this.hooks?.onCacheHit) {
+        safeInvoke(this.hooks.onCacheHit, { tier: "disk", key });
+      }
       return cached;
+    }
+    if (this.hooks?.onCacheMiss) {
+      safeInvoke(this.hooks.onCacheMiss, { tier: "disk", key });
     }
 
     // Deduplicate in-flight requests (thundering herd protection)
@@ -104,18 +127,15 @@ function isMetadataKey(key: string): boolean {
   return METADATA_SUFFIXES.some((suffix) => key.endsWith(suffix));
 }
 
-function deriveStoreId(store: Store): string {
-  // Try to extract identity from known store types
-  const s = store as unknown as Record<string, unknown>;
-  if (typeof s.bucket === "string") {
-    // S3Store-like
-    const prefix = typeof s.prefix === "string" ? s.prefix : "";
-    return `s3://${s.bucket}/${prefix}`;
-  }
-  if (typeof s.baseUrl === "string") {
-    // HTTPStore-like
-    return s.baseUrl as string;
-  }
-  // Fallback: use a generic identifier
-  return `store-${Date.now()}`;
+// Per-process fallback for stores with no derivable identity. The disk cache
+// is local to the pod, so a non-shared id is acceptable here — unlike the
+// shared metadata cache, which fails fast instead (FR-008a). The id must be
+// non-deterministic across restarts: DiskCache maps storeId → directory with
+// no content validation, so a reproducible id (e.g. a bare counter) could
+// hand one dataset another dataset's cached chunks after a restart that
+// constructs stores in a different order.
+let fallbackCounter = 0;
+
+function fallbackStoreId(): string {
+  return `store-local-${process.pid}-${Date.now().toString(36)}-${fallbackCounter++}`;
 }

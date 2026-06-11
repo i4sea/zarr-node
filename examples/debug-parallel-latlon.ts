@@ -11,7 +11,7 @@ function fmt(ms: number): string {
 async function main() {
   const cacheDir = join(tmpdir(), `zarr-parallel-${Date.now()}`);
   const s3 = new S3Store({ bucket: "my-zarr-bucket", prefix: "my-data.zarr", region: "us-east-1" });
-  const store = new CachedStore(s3, { cacheDir, storeId: "parallel-test" });
+  const store = new CachedStore(s3, { cacheDir, storeId: "parallel-test", maxSizeBytes: 1024 ** 3 });
 
   const root = await openGroup(store);
   const lat = await root.getArray("lat");

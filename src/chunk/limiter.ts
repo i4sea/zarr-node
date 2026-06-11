@@ -1,3 +1,5 @@
+import { safeInvoke } from "../observability.js";
+
 /**
  * FIFO semaphore that bounds work by a *byte budget* rather than a slot count.
  *
@@ -15,10 +17,12 @@ export class ByteLimiter {
   private readonly capacity: number;
   private available: number;
   private readonly waiters: Array<{ cost: number; resolve: () => void }> = [];
+  private readonly onInFlightBytes?: (current: number) => void;
 
-  constructor(capacity: number) {
+  constructor(capacity: number, onInFlightBytes?: (current: number) => void) {
     this.capacity = Math.max(1, capacity);
     this.available = this.capacity;
+    this.onInFlightBytes = onInFlightBytes;
   }
 
   /** Reserve `cost` bytes, waiting (FIFO) until the budget allows. */
@@ -30,6 +34,7 @@ export class ByteLimiter {
     // Fast path: no one waiting and budget available -> reserve immediately.
     if (this.waiters.length === 0 && this.available >= c) {
       this.available -= c;
+      if (this.onInFlightBytes) this.notifyInFlight(this.onInFlightBytes);
       return;
     }
     // Otherwise queue; the budget is reserved for us by pump() before we resume.
@@ -43,6 +48,13 @@ export class ByteLimiter {
     this.available += this.clamp(cost);
     if (this.available > this.capacity) this.available = this.capacity;
     this.pump();
+    // Notify once with the net budget after waiters were re-reserved by pump().
+    if (this.onInFlightBytes) this.notifyInFlight(this.onInFlightBytes);
+  }
+
+  /** Report the bytes currently reserved, isolating handler throws (SC-004). */
+  private notifyInFlight(fn: (current: number) => void): void {
+    safeInvoke(fn, this.capacity - this.available);
   }
 
   private pump(): void {

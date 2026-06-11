@@ -13,7 +13,7 @@ const counting = {
 };
 
 const cacheDir = join(tmpdir(), "zarr-debug-" + Date.now());
-const cached = new CachedStore(counting, { cacheDir, storeId: "debug" });
+const cached = new CachedStore(counting, { cacheDir, storeId: "debug", maxSizeBytes: 1024 ** 3 });
 
 count = 0;
 const root = await openGroup(cached);

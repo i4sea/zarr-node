@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { access } from "node:fs/promises";
 import { FileSystemStore } from "../../src/store/filesystem.js";
 import { openArray } from "../../src/index.js";
+import type { Store } from "../../src/store/store.js";
 
 const FIXTURES = join(import.meta.dirname, "..", "fixtures");
 
@@ -79,5 +80,85 @@ describe("T050 — Memory: slice read of 1GB array < 100MB overhead", () => {
 
     console.log(`  Slice read memory overhead: ${overheadMB.toFixed(1)}MB`);
     expect(overheadMB).toBeLessThan(100);
+  });
+});
+
+describe("T020 — SC-004: zero overhead with no observability hooks registered", () => {
+  /** Synthetic in-memory zarr v2 array: many small chunks so per-chunk loop
+   *  overhead dominates, which is exactly where hook dispatch would show up. */
+  function syntheticStore(): Store {
+    const map = new Map<string, Uint8Array>();
+    map.set(
+      ".zarray",
+      new TextEncoder().encode(
+        JSON.stringify({
+          zarr_format: 2,
+          shape: [64, 64],
+          chunks: [8, 8],
+          dtype: "<f4",
+          compressor: null,
+          fill_value: 0,
+          order: "C",
+          filters: null,
+        }),
+      ),
+    );
+    const chunk = new Uint8Array(8 * 8 * 4);
+    new Float32Array(chunk.buffer).fill(1.5);
+    for (let i = 0; i < 8; i++) {
+      for (let j = 0; j < 8; j++) {
+        map.set(`${i}.${j}`, chunk.slice());
+      }
+    }
+    return {
+      async get(key) {
+        return map.get(key) ?? null;
+      },
+      async has(key) {
+        return map.has(key);
+      },
+      async *list() {},
+    };
+  }
+
+  function median(samples: number[]): number {
+    const sorted = [...samples].sort((a, b) => a - b);
+    return sorted[Math.floor(sorted.length / 2)];
+  }
+
+  it("read throughput with an empty hooks object is statistically unchanged from baseline", async () => {
+    const store = syntheticStore();
+    const arr = await openArray(store);
+
+    const ITERATIONS = 40;
+    const baseline: number[] = [];
+    const withGuards: number[] = [];
+
+    // Warm-up (JIT, codec paths) before measuring.
+    for (let i = 0; i < 5; i++) {
+      await arr.get();
+      await arr.get(undefined, { observability: {} });
+    }
+
+    // Interleave samples so drift (GC, CPU frequency) hits both groups equally.
+    for (let i = 0; i < ITERATIONS; i++) {
+      let start = performance.now();
+      await arr.get();
+      baseline.push(performance.now() - start);
+
+      start = performance.now();
+      await arr.get(undefined, { observability: {} });
+      withGuards.push(performance.now() - start);
+    }
+
+    const ratio = median(withGuards) / median(baseline);
+    console.log(
+      `  no-hooks read: baseline ${median(baseline).toFixed(3)}ms, ` +
+        `with empty hooks ${median(withGuards).toFixed(3)}ms (ratio ${ratio.toFixed(2)})`,
+    );
+
+    // Generous tolerance to absorb CI noise — a per-chunk payload allocation
+    // or unconditional dispatch shows up far above this.
+    expect(ratio).toBeLessThan(1.5);
   });
 });

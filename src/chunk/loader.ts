@@ -1,6 +1,9 @@
 import type { Store } from "../store/store.js";
 import type { Codec } from "../codec/codec.js";
 import type { MemoryCache } from "../cache/memory.js";
+import type { ObservabilityHooks } from "../observability.js";
+import { safeInvoke } from "../observability.js";
+import { MissingChunkError } from "../errors.js";
 import type { ByteLimiter } from "./limiter.js";
 
 export interface ChunkTask {
@@ -30,6 +33,10 @@ export interface LoadChunksContext {
    * limiter cost for full-chunk reads.
    */
   peakPerChunk: number;
+  /** Per-read observability hooks (memory-tier hit/miss, chunk decode). */
+  observability?: ObservabilityHooks;
+  /** Throw MissingChunkError on absent chunks instead of zero-filling. */
+  strict?: boolean;
 }
 
 /**
@@ -42,20 +49,39 @@ export interface LoadChunksContext {
  * `limiter.capacity` instead of the sum of every selected chunk — the
  * difference between bounded and unbounded memory on wide point-slice reads of
  * compressed arrays.
+ *
+ * Missing chunks are NOT delivered: the caller pre-fills the output with the
+ * array's fill_value, so an absent chunk just leaves its region untouched
+ * (after firing `onMissingChunk` and, under `strict`, throwing).
  */
 export async function loadChunks(
   store: Store,
   codec: Codec | null,
   tasks: ChunkTask[],
-  fillValue: number | null,
-  chunkByteSize: number,
   ctx: LoadChunksContext,
   onChunk: (chunk: LoadedChunk) => void,
 ): Promise<void> {
   const { concurrency, memoryCache, limiter, peakPerChunk } = ctx;
+  const hooks = ctx.observability;
+  const strict = ctx.strict === true;
 
   // Can we use byte-range requests? Only when uncompressed and store supports it.
   const getRange = codec === null ? store.getRange?.bind(store) : undefined;
+
+  // First failure aborts the read: the scheduler stops launching tasks, and
+  // in-flight tasks short-circuit after their pending await instead of
+  // decoding/delivering into an output the caller has already abandoned.
+  let failed = false;
+  let firstError: unknown;
+
+  function handleMissing(key: string): void {
+    if (hooks?.onMissingChunk) {
+      safeInvoke(hooks.onMissingChunk, { key });
+    }
+    if (strict) {
+      throw new MissingChunkError(key);
+    }
+  }
 
   async function processTask(task: ChunkTask): Promise<void> {
     // Cache hit: the buffer already lives in the (bounded) cache, so copying it
@@ -63,8 +89,14 @@ export async function loadChunks(
     if (memoryCache) {
       const cached = memoryCache.get(task.key);
       if (cached !== null) {
+        if (hooks?.onCacheHit) {
+          safeInvoke(hooks.onCacheHit, { tier: "memory", key: task.key });
+        }
         onChunk({ chunkCoord: task.chunkCoord, data: cached });
         return;
+      }
+      if (hooks?.onCacheMiss) {
+        safeInvoke(hooks.onCacheMiss, { tier: "memory", key: task.key });
       }
     }
 
@@ -72,12 +104,14 @@ export async function loadChunks(
     const cost = task.byteRange ? task.byteRange.length : peakPerChunk;
     await limiter.acquire(cost);
     try {
+      if (failed) return;
       if (getRange && task.byteRange) {
         const partial = await getRange(
           task.key,
           task.byteRange.offset,
           task.byteRange.length,
         );
+        if (failed) return;
         if (partial !== null) {
           // Don't cache partial reads — cache expects full decoded chunks.
           onChunk({
@@ -87,28 +121,35 @@ export async function loadChunks(
           });
           return;
         }
-        // getRange returning null means the chunk is missing. Fill only the
-        // requested slice — falling through to a full fetch/fill would allocate
-        // a whole chunk under the smaller byte-range reservation, breaking the
-        // maxInFlightBytes bound.
-        onChunk({
-          chunkCoord: task.chunkCoord,
-          data: new Uint8Array(task.byteRange.length),
-          partial: true,
-        });
+        // getRange returning null means the chunk is missing: no delivery,
+        // the pre-filled output already holds fill_value for this region.
+        handleMissing(task.key);
         return;
       }
 
       const raw = await store.get(task.key);
+      if (failed) return;
 
       if (raw === null) {
-        // Missing chunk -> fill with fill_value (default 0)
-        const filled = new Uint8Array(chunkByteSize);
-        onChunk({ chunkCoord: task.chunkCoord, data: filled });
+        // Missing chunk: no delivery, the pre-filled output already holds
+        // fill_value for this region.
+        handleMissing(task.key);
         return;
       }
 
-      const decoded = codec ? await codec.decode(raw) : raw;
+      let decoded: Uint8Array;
+      if (hooks?.onChunkDecoded) {
+        const start = performance.now();
+        decoded = codec ? await codec.decode(raw) : raw;
+        safeInvoke(hooks.onChunkDecoded, {
+          bytes: decoded.byteLength,
+          codec: codec ? codec.id : null,
+          decodeMs: performance.now() - start,
+        });
+      } else {
+        decoded = codec ? await codec.decode(raw) : raw;
+      }
+      if (failed) return;
 
       // Store decoded result in memory cache.
       if (memoryCache) {
@@ -126,12 +167,23 @@ export async function loadChunks(
   const inFlight = new Set<Promise<void>>();
   let index = 0;
 
-  while (index < tasks.length) {
-    while (inFlight.size < concurrency && index < tasks.length) {
+  while (index < tasks.length && !failed) {
+    while (inFlight.size < concurrency && index < tasks.length && !failed) {
       const task = tasks[index++];
-      const p = processTask(task).then(() => {
-        inFlight.delete(p);
-      });
+      // `p` never rejects: failures are recorded and rethrown after the drain
+      // below, so no member of `inFlight` can become an unhandled rejection.
+      const p = processTask(task).then(
+        () => {
+          inFlight.delete(p);
+        },
+        (err: unknown) => {
+          inFlight.delete(p);
+          if (!failed) {
+            failed = true;
+            firstError = err;
+          }
+        },
+      );
       inFlight.add(p);
     }
     if (inFlight.size > 0) {
@@ -139,5 +191,10 @@ export async function loadChunks(
     }
   }
 
+  // Drain survivors before surfacing a failure so every limiter reservation
+  // is released by the time the caller observes the rejection.
   await Promise.all(inFlight);
+  if (failed) {
+    throw firstError;
+  }
 }

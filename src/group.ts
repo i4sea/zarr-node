@@ -12,6 +12,8 @@ import {
 } from "./metadata/v2.js";
 import { MetadataError } from "./errors.js";
 import { codecRegistry } from "./codec/codec.js";
+import type { MetadataCacheContext } from "./cache/read-through.js";
+import { readMetadataThrough } from "./cache/read-through.js";
 
 export class ZarrGroup {
   readonly attrs: Readonly<Record<string, unknown>>;
@@ -19,17 +21,20 @@ export class ZarrGroup {
   private readonly store: Store;
   private readonly basePath: string;
   private readonly consolidatedMeta: ConsolidatedMetadata | null;
+  private readonly metaContext?: MetadataCacheContext;
 
   constructor(
     store: Store,
     attrs: Zattrs,
     basePath: string,
     consolidatedMeta: ConsolidatedMetadata | null = null,
+    metaContext?: MetadataCacheContext,
   ) {
     this.store = store;
     this.attrs = attrs;
     this.basePath = basePath;
     this.consolidatedMeta = consolidatedMeta;
+    this.metaContext = metaContext;
   }
 
   async getArray(name: string): Promise<ZarrArray> {
@@ -60,7 +65,13 @@ export class ZarrGroup {
     }
     parseZgroupMeta(new TextDecoder().decode(raw));
     const attrs = await this.loadAttrs(path);
-    return new ZarrGroup(this.store, attrs, path, this.consolidatedMeta);
+    return new ZarrGroup(
+      this.store,
+      attrs,
+      path,
+      this.consolidatedMeta,
+      this.metaContext,
+    );
   }
 
   async *arrays(): AsyncIterable<[string, ZarrArray]> {
@@ -87,7 +98,11 @@ export class ZarrGroup {
    * prevents the `arrays × concurrency × chunkSize` blow-up of reading many
    * compressed arrays at once: the total live decoded footprint stays near the
    * single budget instead of multiplying per array.
-   * Invalid array names are silently skipped (partial failure handling).
+   * Invalid array names are silently skipped (partial failure handling), but
+   * a read that starts and then fails (store error, `MissingChunkError` under
+   * `strict`) rejects with that error once every sibling read has settled —
+   * chunk keys are array-path-scoped, so the error identifies which array
+   * failed.
    */
   async readMultiple(
     names: string[],
@@ -110,6 +125,7 @@ export class ZarrGroup {
     // One byte budget shared across every array read.
     const limiter = new ByteLimiter(
       options?.maxInFlightBytes ?? DEFAULT_MAX_IN_FLIGHT_BYTES,
+      options?.observability?.onInFlightBytes,
     );
 
     // Read all arrays through the shared budget.
@@ -118,7 +134,14 @@ export class ZarrGroup {
       return { name, data };
     });
 
+    // allSettled (not all) so sibling reads drain — and release their shared
+    // budget — before a failure is surfaced.
     const settled = await Promise.allSettled(promises);
+    for (const result of settled) {
+      if (result.status === "rejected") {
+        throw result.reason;
+      }
+    }
     for (const result of settled) {
       if (result.status === "fulfilled") {
         results.set(result.value.name, result.value.data);
@@ -158,7 +181,8 @@ export class ZarrGroup {
   }
 
   /**
-   * Get metadata by key. Checks consolidated cache first, falls back to store.
+   * Get metadata by key. Checks consolidated cache first, then reads through
+   * the shared metadata cache (when configured), falling back to the store.
    */
   private async getMeta(key: string): Promise<Uint8Array | null> {
     if (this.consolidatedMeta) {
@@ -166,15 +190,22 @@ export class ZarrGroup {
       if (cached !== null) return cached;
       // Cache miss — fall back to store (FR-005)
     }
-    return this.store.get(key);
+    return readMetadataThrough(this.store, key, this.metaContext);
   }
 
   /**
-   * Check if metadata key exists. Checks consolidated cache first.
+   * Check if metadata key exists. Checks consolidated cache first. With a
+   * shared metadata cache, existence is answered through the same
+   * read-through as getMeta — keeping both coherent (including negative
+   * entries) and avoiding store round-trips once the cache is warm.
    */
   private async hasMeta(key: string): Promise<boolean> {
     if (this.consolidatedMeta && this.consolidatedMeta.has(key)) {
       return true;
+    }
+    if (this.metaContext) {
+      const raw = await readMetadataThrough(this.store, key, this.metaContext);
+      return raw !== null;
     }
     return this.store.has(key);
   }

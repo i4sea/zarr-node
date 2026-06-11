@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { loadChunks } from "../../src/chunk/loader.js";
 import type { ChunkTask, LoadedChunk } from "../../src/chunk/loader.js";
 import { ByteLimiter } from "../../src/chunk/limiter.js";
+import { MissingChunkError } from "../../src/errors.js";
 import type { Store } from "../../src/store/store.js";
 import type { Codec } from "../../src/codec/codec.js";
 
@@ -61,8 +62,6 @@ describe("loadChunks — bounded in-flight memory", () => {
       store,
       identityCodec,
       makeTasks(20),
-      null,
-      4,
       { concurrency: 50, limiter, peakPerChunk: 10 },
       (c) => delivered.push(c),
     );
@@ -84,8 +83,6 @@ describe("loadChunks — bounded in-flight memory", () => {
       store,
       identityCodec,
       makeTasks(20),
-      null,
-      4,
       { concurrency: 5, limiter, peakPerChunk: 10 },
       (c) => delivered.push(c),
     );
@@ -94,7 +91,7 @@ describe("loadChunks — bounded in-flight memory", () => {
     expect(delivered).toHaveLength(20);
   });
 
-  it("fills only the requested slice when getRange misses (stays in budget)", async () => {
+  it("skips delivery when getRange misses, without a full-chunk fetch", async () => {
     let fullGets = 0;
     const store: Store = {
       async get() {
@@ -115,16 +112,12 @@ describe("loadChunks — bounded in-flight memory", () => {
       store,
       null, // uncompressed -> byte-range path is active
       [{ key: "0", chunkCoord: [0], byteRange: { offset: 0, length: 16 } }],
-      null,
-      4096,
       { concurrency: 4, limiter: new ByteLimiter(1024), peakPerChunk: 4096 },
       (c) => delivered.push(c),
     );
 
     expect(fullGets).toBe(0); // no full-chunk fetch under the small reservation
-    expect(delivered).toHaveLength(1);
-    expect(delivered[0].partial).toBe(true);
-    expect(delivered[0].data.byteLength).toBe(16);
+    expect(delivered).toHaveLength(0); // output pre-fill covers the region
   });
 
   it("lets a single oversized chunk proceed (no deadlock)", async () => {
@@ -136,8 +129,6 @@ describe("loadChunks — bounded in-flight memory", () => {
       store,
       identityCodec,
       makeTasks(3),
-      null,
-      4,
       { concurrency: 50, limiter, peakPerChunk: 1000 }, // each chunk > capacity
       (c) => delivered.push(c),
     );
@@ -145,5 +136,212 @@ describe("loadChunks — bounded in-flight memory", () => {
     // Oversized cost clamps to capacity -> exactly one chunk in flight at a time.
     expect(maxConcurrent()).toBe(1);
     expect(delivered).toHaveLength(3);
+  });
+});
+
+describe("loadChunks — missing chunks (onMissingChunk / strict)", () => {
+  /** Store with no chunks at all: full fetches and byte-range reads both miss. */
+  const emptyStore: Store = {
+    async get() {
+      return null;
+    },
+    async getRange() {
+      return null;
+    },
+    async has() {
+      return false;
+    },
+    async *list() {},
+  };
+
+  it("default mode skips delivery and fires onMissingChunk on the full-fetch path", async () => {
+    const missing: { key: string }[] = [];
+    const delivered: LoadedChunk[] = [];
+
+    await loadChunks(
+      emptyStore,
+      identityCodec,
+      [{ key: "1.2", chunkCoord: [1, 2] }],
+      {
+        concurrency: 4,
+        limiter: new ByteLimiter(1024),
+        peakPerChunk: 8,
+        observability: { onMissingChunk: (e) => missing.push(e) },
+      },
+      (c) => delivered.push(c),
+    );
+
+    expect(delivered).toHaveLength(0);
+    expect(missing).toEqual([{ key: "1.2" }]);
+  });
+
+  it("default mode skips delivery and fires onMissingChunk on the byte-range miss path", async () => {
+    const missing: { key: string }[] = [];
+    const delivered: LoadedChunk[] = [];
+
+    await loadChunks(
+      emptyStore,
+      null, // uncompressed -> byte-range path is active
+      [{ key: "0", chunkCoord: [0], byteRange: { offset: 0, length: 16 } }],
+      {
+        concurrency: 4,
+        limiter: new ByteLimiter(1024),
+        peakPerChunk: 4096,
+        observability: { onMissingChunk: (e) => missing.push(e) },
+      },
+      (c) => delivered.push(c),
+    );
+
+    expect(delivered).toHaveLength(0);
+    expect(missing).toEqual([{ key: "0" }]);
+  });
+
+  it("strict: true throws MissingChunkError with the key on the full-fetch path", async () => {
+    await expect(
+      loadChunks(
+        emptyStore,
+        identityCodec,
+        [{ key: "3.4", chunkCoord: [3, 4] }],
+        {
+          concurrency: 4,
+          limiter: new ByteLimiter(1024),
+          peakPerChunk: 8,
+          strict: true,
+        },
+        () => {},
+      ),
+    ).rejects.toThrow(MissingChunkError);
+
+    await expect(
+      loadChunks(
+        emptyStore,
+        identityCodec,
+        [{ key: "3.4", chunkCoord: [3, 4] }],
+        {
+          concurrency: 4,
+          limiter: new ByteLimiter(1024),
+          peakPerChunk: 8,
+          strict: true,
+        },
+        () => {},
+      ),
+    ).rejects.toThrow("3.4");
+  });
+
+  it("strict: true throws MissingChunkError with the key on the byte-range miss path", async () => {
+    await expect(
+      loadChunks(
+        emptyStore,
+        null,
+        [{ key: "7", chunkCoord: [7], byteRange: { offset: 0, length: 16 } }],
+        {
+          concurrency: 4,
+          limiter: new ByteLimiter(1024),
+          peakPerChunk: 4096,
+          strict: true,
+        },
+        () => {},
+      ),
+    ).rejects.toBeInstanceOf(MissingChunkError);
+  });
+
+  it("strict: true still fires onMissingChunk before throwing", async () => {
+    const missing: { key: string }[] = [];
+
+    await expect(
+      loadChunks(
+        emptyStore,
+        identityCodec,
+        [{ key: "5", chunkCoord: [5] }],
+        {
+          concurrency: 4,
+          limiter: new ByteLimiter(1024),
+          peakPerChunk: 8,
+          strict: true,
+          observability: { onMissingChunk: (e) => missing.push(e) },
+        },
+        () => {},
+      ),
+    ).rejects.toBeInstanceOf(MissingChunkError);
+
+    expect(missing).toEqual([{ key: "5" }]);
+  });
+
+  it("strict failure stops scheduling new fetches (fail-fast)", async () => {
+    let gets = 0;
+    const store: Store = {
+      async get() {
+        gets++;
+        return null; // every chunk missing
+      },
+      async has() {
+        return false;
+      },
+      async *list() {},
+    };
+
+    await expect(
+      loadChunks(
+        store,
+        identityCodec,
+        makeTasks(10),
+        {
+          concurrency: 2,
+          limiter: new ByteLimiter(1024),
+          peakPerChunk: 4,
+          strict: true,
+        },
+        () => {},
+      ),
+    ).rejects.toBeInstanceOf(MissingChunkError);
+
+    // Only the first wave (concurrency = 2) is ever launched; the failure
+    // gates the scheduler before any of the remaining 8 tasks start.
+    expect(gets).toBeLessThanOrEqual(2);
+  });
+
+  it("strict failure surfaces only after in-flight tasks release the budget", async () => {
+    const delivered: LoadedChunk[] = [];
+    const store: Store = {
+      async get(key: string) {
+        if (key === "0") return null; // missing, fails fast
+        await delay(20); // slow sibling still in flight at failure time
+        return new Uint8Array(4);
+      },
+      async has() {
+        return true;
+      },
+      async *list() {},
+    };
+
+    const limiter = new ByteLimiter(1024);
+    await expect(
+      loadChunks(
+        store,
+        identityCodec,
+        makeTasks(3),
+        { concurrency: 3, limiter, peakPerChunk: 10, strict: true },
+        (c) => delivered.push(c),
+      ),
+    ).rejects.toBeInstanceOf(MissingChunkError);
+
+    // Budget fully restored by the time the rejection is observed, and the
+    // aborted siblings did not deliver into the abandoned output.
+    expect(limiter.availableBytes).toBe(1024);
+    expect(delivered).toHaveLength(0);
+  });
+
+  it("strict omitted does not throw on missing chunks", async () => {
+    const delivered: LoadedChunk[] = [];
+
+    await loadChunks(
+      emptyStore,
+      identityCodec,
+      [{ key: "0.0", chunkCoord: [0, 0] }],
+      { concurrency: 4, limiter: new ByteLimiter(1024), peakPerChunk: 32 },
+      (c) => delivered.push(c),
+    );
+
+    expect(delivered).toHaveLength(0);
   });
 });

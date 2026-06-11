@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { join } from "node:path";
 import { FileSystemStore } from "../../src/store/filesystem.js";
-import { openGroup } from "../../src/index.js";
+import { openGroup, MissingChunkError } from "../../src/index.js";
 import type { Store } from "../../src/store/store.js";
 
 const FIXTURES = join(import.meta.dirname, "..", "fixtures");
@@ -26,6 +26,26 @@ describe("readMultiple", () => {
     const wind = results.get("wind")!;
     expect(temp.length).toBe(12);
     expect(wind.length).toBe(12);
+  });
+
+  it("fires onInFlightBytes on the shared byte limiter", async () => {
+    const store = new FileSystemStore({ path: join(FIXTURES, "multi_array") });
+    const root = await openGroup(store);
+
+    const readings: number[] = [];
+    const results = await root.readMultiple(
+      ["temperature", "wind"],
+      undefined,
+      {
+        observability: { onInFlightBytes: (current) => readings.push(current) },
+      },
+    );
+
+    expect(results.size).toBe(2);
+    expect(readings.length).toBeGreaterThan(0);
+    expect(readings.some((r) => r > 0)).toBe(true);
+    // Budget fully returned once the read completes.
+    expect(readings[readings.length - 1]).toBe(0);
   });
 
   it("reads all arrays without selection (full read)", async () => {
@@ -159,5 +179,63 @@ describe("readMultiple", () => {
 
     // Invalid array should have an error entry
     expect(results.has("nonexistent_array")).toBe(false);
+  });
+
+  // Strict reads must not be swallowed by the multi-array path.
+  describe("strict missing chunks", () => {
+    function sparseGroupStore(): Store {
+      const enc = new TextEncoder();
+      const zarray = enc.encode(
+        JSON.stringify({
+          shape: [2],
+          chunks: [1],
+          dtype: "<i4",
+          fill_value: 0,
+          order: "C",
+          filters: null,
+          dimension_separator: ".",
+          compressor: null,
+          zarr_format: 2,
+        }),
+      );
+      // Array "a" is complete; array "b" is missing chunk b/1.
+      const data = new Map<string, Uint8Array>([
+        [".zgroup", enc.encode(JSON.stringify({ zarr_format: 2 }))],
+        ["a/.zarray", zarray],
+        ["b/.zarray", zarray],
+        ["a/0", new Uint8Array(new Int32Array([1]).buffer)],
+        ["a/1", new Uint8Array(new Int32Array([2]).buffer)],
+        ["b/0", new Uint8Array(new Int32Array([3]).buffer)],
+      ]);
+      return {
+        async get(key: string) {
+          return data.get(key) ?? null;
+        },
+        async has(key: string) {
+          return data.has(key);
+        },
+        async *list() {},
+      };
+    }
+
+    it("rejects with MissingChunkError under strict: true", async () => {
+      const root = await openGroup(sparseGroupStore());
+
+      await expect(
+        root.readMultiple(["a", "b"], undefined, { strict: true }),
+      ).rejects.toThrow(MissingChunkError);
+      await expect(
+        root.readMultiple(["a", "b"], undefined, { strict: true }),
+      ).rejects.toThrow("b/1");
+    });
+
+    it("still fills missing chunks when strict is unset", async () => {
+      const root = await openGroup(sparseGroupStore());
+
+      const results = await root.readMultiple(["a", "b"]);
+
+      expect(Array.from(results.get("a")!)).toEqual([1, 2]);
+      expect(Array.from(results.get("b")!)).toEqual([3, 0]);
+    });
   });
 });

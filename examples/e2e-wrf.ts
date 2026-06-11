@@ -30,7 +30,7 @@ async function main() {
     prefix: "my-data.zarr",
     region: "us-east-1",
   });
-  const store = new CachedStore(s3, { cacheDir, storeId: "wrf-e2e" });
+  const store = new CachedStore(s3, { cacheDir, storeId: "wrf-e2e", maxSizeBytes: 1024 ** 3 });
 
   // 2. Open root group (consolidated metadata)
   let t0 = performance.now();
