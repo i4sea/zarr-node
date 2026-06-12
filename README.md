@@ -98,6 +98,28 @@ const array = await open(store);
 const data = await array.read();
 ```
 
+#### Connection pooling and prewarming
+
+S3 reads are latency-bound: each chunk is one round trip. Two levers reduce that:
+
+```typescript
+const store = new S3Store({
+  bucket: "my-bucket",
+  prefix: "data.zarr",
+  region: "us-east-1",
+  maxSockets: 256, // keep-alive pool size (default 128). Set >= read concurrency.
+  warmOnCreate: true, // open a TLS connection up front (or call store.prewarm())
+});
+
+await store.prewarm(); // optional explicit warm-up at pod startup
+const data = await array.read(undefined, { concurrency: 200 });
+```
+
+`maxSockets` (default **128**, keep-alive on) caps how many chunk fetches run in
+parallel — raise the read `concurrency` and keep `maxSockets >= concurrency` so a
+many-chunk read finishes in one wave instead of several. **Run the reader in the
+same AWS region as the bucket** — that, not the library, dominates latency.
+
 ### Groups and multi-array reads
 
 ```typescript
@@ -326,6 +348,38 @@ const array = await open(store, "temperature");
 const data = await array.read();
 ```
 
+### Spatial lookups (GridIndex)
+
+`@i4sea/zarr-node/spatial` resolves a (lat, lon) to the nearest grid cell `(i, j)`
+on a 2D curvilinear grid (e.g. a WRF domain). The grid is static per domain, so it
+is loaded once and queried many times — each query is pure CPU.
+
+```typescript
+import { openGroup } from "@i4sea/zarr-node";
+import { GridIndex } from "@i4sea/zarr-node/spatial";
+
+const group = await openGroup(store);
+const grid = await GridIndex.fromGroup(group); // loads lat/lon once
+const { i, j, distanceKm } = grid.nearest(-25.5, -44.5);
+const series = await (await group.getArray("wind_vel")).get([null, [i, i + 1], [j, j + 1]]);
+```
+
+For ephemeral pods, persist the grid in a shared `Cache` (Redis) so only the first
+pod pays the coordinate fetch — restarts and new pods rehydrate from the cache:
+
+```typescript
+import { RedisCache } from "@i4sea/zarr-node/redis";
+
+const cache = new RedisCache(process.env.REDIS_URL!);
+// L1 (process) → L2 (Redis) → L3 (store). The key is derived per *domain*
+// (source_model/experiment/grid_id + shape), so every run of the same grid shares it.
+const grid = await GridIndex.loadCached(group, { cache });
+```
+
+Pass an explicit `gridKey` to control the cache key, or `verifyGrid: true` to fold a
+corner sample of the coordinates into it (+2 cheap reads) when the dataset attrs
+can't be trusted.
+
 ## Requirements
 
 - Node.js >= 22
@@ -368,6 +422,12 @@ All three accept `OpenOptions { metadataCache?, storeId?, observability? }`.
 | --- | --- |
 | `ZarrArray` | Read chunked array data with slicing support |
 | `ZarrGroup` | Traverse groups, list arrays, multi-array reads |
+
+### Spatial
+
+| Class | Description |
+| --- | --- |
+| `GridIndex` | Nearest (lat, lon) → (i, j) on a 2D grid, with optional Redis-backed grid cache (`@i4sea/zarr-node/spatial`) |
 
 ## Contributing
 

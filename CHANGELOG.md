@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+S3 latency reduction. All additions are opt-in or strictly improve defaults.
+
+### Added
+
+- **S3 connection pooling.** `S3StoreOptions` gains `maxSockets` (default **128**, keep-alive on), `keepAlive`, `connectionTimeoutMs`, and a `requestHandler` escape hatch. The store now builds a `NodeHttpHandler` with a keep-alive `https.Agent` so many-chunk reads aren't capped at the SDK's ~50-socket default — raise the read `concurrency` and keep `maxSockets >= concurrency` to collapse a read into fewer waves. Degrades gracefully to the SDK default handler if `@smithy/node-http-handler` (new optional dependency) is unavailable.
+- **S3 connection prewarming.** `S3Store.prewarm()` opens a pooled TLS connection ahead of the first read (best-effort, swallows errors). `S3StoreOptions.warmOnCreate` triggers it fire-and-forget on construction.
+- **`GridIndex` spatial helper** (`@i4sea/zarr-node/spatial`). Resolves nearest `(i, j)` for a (lat, lon) on a 2D curvilinear grid. `fromCoordinates`/`fromGroup` build it once (queries are pure CPU); `loadCached(group, { cache })` adds an L1 (process) + L2 (shared `Cache`/Redis) layer so only the first pod pays the coordinate fetch — keyed per *domain* (`source_model`/`experiment`/`grid_id` + shape) so every run of the same grid shares one entry, with `gridKey` override and optional `verifyGrid` content fingerprint. `toBytes`/`fromBytes` give a compact binary snapshot for the cache.
+- README: S3 connection-pooling/prewarming guidance and a "Spatial lookups (GridIndex)" section.
+
 ## [0.5.0] — 2026-06-10
 
 Production hardening release. All new capabilities are opt-in; omitting the new options preserves current behavior.

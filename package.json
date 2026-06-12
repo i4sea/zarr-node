@@ -19,6 +19,12 @@
       "require": "./dist/cjs/redis/index.js",
       "default": "./dist/redis/index.js"
     },
+    "./spatial": {
+      "types": "./dist/spatial/index.d.ts",
+      "import": "./dist/spatial/index.js",
+      "require": "./dist/cjs/spatial/index.js",
+      "default": "./dist/spatial/index.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -93,5 +99,8 @@
   "sideEffects": false,
   "dependencies": {
     "numcodecs": "^0.3.2"
+  },
+  "optionalDependencies": {
+    "@smithy/node-http-handler": "^4.0.0"
   }
 }

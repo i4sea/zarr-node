@@ -31,6 +31,10 @@ export class S3Store implements Store {
   private readonly endpoint?: string;
   private readonly maxRetries: number;
   private readonly timeout: number;
+  private readonly maxSockets: number;
+  private readonly keepAlive: boolean;
+  private readonly connectionTimeoutMs: number;
+  private readonly requestHandler?: unknown;
   private readonly hooks?: ObservabilityHooks;
   private clientPromise: Promise<S3Client> | null = null;
 
@@ -41,7 +45,38 @@ export class S3Store implements Store {
     this.endpoint = options.endpoint;
     this.maxRetries = options.maxRetries ?? DEFAULT_RETRY_CONFIG.maxRetries;
     this.timeout = options.timeout ?? DEFAULT_RETRY_CONFIG.timeoutMs;
+    this.maxSockets = options.maxSockets ?? 128;
+    this.keepAlive = options.keepAlive ?? true;
+    this.connectionTimeoutMs = options.connectionTimeoutMs ?? 3000;
+    this.requestHandler = options.requestHandler;
     this.hooks = options.observability;
+
+    if (options.warmOnCreate) {
+      // Fire-and-forget: open a pooled TLS connection so the first read skips
+      // the handshake. Errors are irrelevant here (prewarm swallows them).
+      void this.prewarm();
+    }
+  }
+
+  /**
+   * Open a keep-alive connection in the pool ahead of the first real read, so
+   * it doesn't pay the TLS handshake. Best-effort: a missing key or a
+   * connection error is swallowed — the only goal is the warm socket.
+   */
+  async prewarm(): Promise<void> {
+    try {
+      const client = await this.getClient();
+      const sdk = await loadS3SDK();
+      await client.send(
+        new sdk.HeadObjectCommand({
+          Bucket: this.bucket,
+          Key: this.resolveKey(".zmetadata"),
+        }),
+        { abortSignal: AbortSignal.timeout(this.timeout) },
+      );
+    } catch {
+      // The handshake happens regardless of a 404/auth/connection outcome.
+    }
   }
 
   async get(key: string): Promise<Uint8Array | null> {
@@ -225,6 +260,7 @@ export class S3Store implements Store {
       // multiply with it (up to maxAttempts × (maxRetries+1) requests) and
       // make the documented maxRetries option meaningless.
       maxAttempts: 1,
+      requestHandler: await this.buildRequestHandler(),
       ...(this.endpoint
         ? {
             endpoint: this.endpoint,
@@ -232,6 +268,40 @@ export class S3Store implements Store {
           }
         : {}),
     });
+  }
+
+  /**
+   * Build the HTTP request handler. A caller-supplied `requestHandler` wins;
+   * otherwise we wrap a keep-alive `https.Agent` with a raised `maxSockets`
+   * (the SDK default is ~50, which caps parallel chunk fetches). Degrades
+   * gracefully to the SDK default handler if `@smithy/node-http-handler` can't
+   * be loaded.
+   */
+  private async buildRequestHandler(): Promise<unknown> {
+    if (this.requestHandler) return this.requestHandler;
+    try {
+      const { NodeHttpHandler } = await import("@smithy/node-http-handler");
+      const { Agent: HttpsAgent } = await import("node:https");
+      const { Agent: HttpAgent } = await import("node:http");
+      const agentOpts = {
+        keepAlive: this.keepAlive,
+        maxSockets: this.maxSockets,
+      };
+      // Configure both agents: an `http://` endpoint (MinIO/LocalStack) uses
+      // httpAgent, an `https://` one uses httpsAgent — so pooling/keep-alive
+      // apply either way.
+      return new NodeHttpHandler({
+        httpsAgent: new HttpsAgent(agentOpts),
+        httpAgent: new HttpAgent(agentOpts),
+        connectionTimeout: this.connectionTimeoutMs,
+      });
+    } catch {
+      console.warn(
+        "[zarr-node] @smithy/node-http-handler unavailable; falling back to " +
+          "the SDK default HTTP handler (maxSockets/keepAlive options ignored).",
+      );
+      return undefined;
+    }
   }
 }
 
