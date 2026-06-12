@@ -129,7 +129,7 @@ export class GridIndex {
     assertGridShape(latArr, lonArr);
 
     const key = opts.gridKey
-      ? KEY_PREFIX + sanitize(opts.gridKey)
+      ? KEY_PREFIX + safeKeyComponent(opts.gridKey)
       : await deriveGridKey(
           group,
           latArr,
@@ -279,6 +279,17 @@ function sanitize(s: string): string {
   return s.replace(/[^A-Za-z0-9._-]/g, "");
 }
 
+/**
+ * Turn an arbitrary user key into a non-empty cache-key component. Keeps a
+ * readable form for normal keys; falls back to a hash of the raw input when
+ * sanitization would empty it (e.g. all-whitespace or non-ASCII), so distinct
+ * overrides never collapse to the same key.
+ */
+function safeKeyComponent(raw: string): string {
+  const cleaned = sanitize(raw);
+  return cleaned || createHash("sha256").update(raw).digest("hex").slice(0, 16);
+}
+
 function assertGridShape(lat: ZarrArray, lon: ZarrArray): void {
   if (lat.shape.length !== 2) {
     throw new Error(
@@ -339,7 +350,9 @@ async function deriveGridKey(
     latArr.shape.join("x"),
     lonArr.shape.join("x"),
     latArr.chunks.join("x"),
+    lonArr.chunks.join("x"),
     latArr.dtype,
+    lonArr.dtype,
   ].join("|");
 
   if (verify) {

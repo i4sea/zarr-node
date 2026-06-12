@@ -245,6 +245,25 @@ describe("GridIndex.loadCached (L1 + L2)", () => {
     expect([...cache.store.keys()]).toEqual(["gridindex:custom-grid"]);
   });
 
+  it("falls back to a hash (not an empty key) for non-sanitizable gridKeys", async () => {
+    const cache = fakeCache();
+    // Both sanitize to "" → must hash distinctly, never collapse to "gridindex:".
+    await GridIndex.loadCached(buildGroup(domainAttrs).group, {
+      cache,
+      gridKey: "日本語",
+    });
+    await GridIndex.loadCached(buildGroup(domainAttrs).group, {
+      cache,
+      gridKey: "中文網格",
+    });
+    const keys = [...cache.store.keys()];
+    expect(keys).toHaveLength(2); // distinct → no collision
+    for (const k of keys) {
+      expect(k).not.toBe("gridindex:");
+      expect(k.length).toBeGreaterThan("gridindex:".length);
+    }
+  });
+
   it("works without a cache (L1 only)", async () => {
     const { group, gets } = buildGroup(domainAttrs);
     const idx = await GridIndex.loadCached(group, {});

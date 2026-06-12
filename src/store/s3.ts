@@ -281,13 +281,18 @@ export class S3Store implements Store {
     if (this.requestHandler) return this.requestHandler;
     try {
       const { NodeHttpHandler } = await import("@smithy/node-http-handler");
-      const { Agent } = await import("node:https");
-      const httpsAgent = new Agent({
+      const { Agent: HttpsAgent } = await import("node:https");
+      const { Agent: HttpAgent } = await import("node:http");
+      const agentOpts = {
         keepAlive: this.keepAlive,
         maxSockets: this.maxSockets,
-      });
+      };
+      // Configure both agents: an `http://` endpoint (MinIO/LocalStack) uses
+      // httpAgent, an `https://` one uses httpsAgent — so pooling/keep-alive
+      // apply either way.
       return new NodeHttpHandler({
-        httpsAgent,
+        httpsAgent: new HttpsAgent(agentOpts),
+        httpAgent: new HttpAgent(agentOpts),
         connectionTimeout: this.connectionTimeoutMs,
       });
     } catch {
