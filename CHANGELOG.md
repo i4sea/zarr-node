@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-06-15
+
+Integrated dataset-session API: a single place that owns ALL caching so consumers stop hand-wiring `CachedStore` + `openGroup` + `MemoryCache` + coordinate caches. Aimed at cross-region S3 serving, where every byte is expensive and low-traffic pods keep caches cold.
+
+### Added
+
+- **`ZarrDatasetRegistry`** (root export). Build one per process; `open(id, storeFactory)` returns a cached `ManagedDataset`. Owns: handle reuse (LRU `maxDatasets`, default 32, with thundering-herd dedup), metadata cache (passed through to `openGroup`, scoped by `id`), an optional on-disk chunk cache (`disk: { cacheDir, maxSizeBytes, ttl? }` → `CachedStore`), a per-dataset decoded-chunk `MemoryCache` (`chunkMemoryCacheBytes`), and a shared decoded-array cache (`coordinateCache`). `storeFactory` keeps the registry store-agnostic — the caller builds the backend `Store` (e.g. a fresh `S3Store`).
+- **`ManagedDataset`**. `read(name, selection, opts)` applies the per-dataset decoded-chunk memory cache + observability automatically (callers can't pass `memoryCache` — it stays dataset-scoped so chunk keys can't collide across datasets). `decodedArray(name, { cacheKey, ttlMs })` returns a small array's DECODED `Float64Array` from L1 (per handle) → L2 (shared `coordinateCache`) before the store; with a run_time-invariant `cacheKey` (a domain key), coordinate arrays are read **once per domain** and reused across every run_time and pod — eliminating the multi-second cold-open coordinate re-read on cross-region stores.
+- The `open`/`openGroup`/`openArray` functions moved to `src/open.ts` (re-exported unchanged from the root — no API change).
+
 ## [0.6.0] — 2026-06-12
 
 S3 latency reduction. All additions are opt-in or strictly improve defaults.
