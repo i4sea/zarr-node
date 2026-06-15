@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] — 2026-06-15
+
+### Fixed
+
+- **Coordinate cache (L2) corrupted decoded arrays served from a Node `Buffer`.** `bytesToFloat64` rebuilt the `Float64Array` with `bytes.slice(0, n).buffer` + `new Float64Array(buffer, 0, …)`, which reads from offset 0 of the underlying `ArrayBuffer`. For a Node `Buffer` (e.g. ioredis `getBuffer`, which carves Buffers from a shared pool), `slice` returns a VIEW with a non-zero `byteOffset`, so the decode read the wrong bytes — yielding shifted/garbage values for any coordinate or time array served from the shared `coordinateCache`. A corrupted, non-ascending time axis then collapsed downstream time-window binary searches (every point folded onto one timestamp). Now copies the view's own byte range via `ArrayBuffer.prototype.slice`, honoring `byteOffset`. Regression test added covering a pooled-`Buffer` round-trip.
+
 ## [0.7.0] — 2026-06-15
 
 Integrated dataset-session API: a single place that owns ALL caching so consumers stop hand-wiring `CachedStore` + `openGroup` + `MemoryCache` + coordinate caches. Aimed at cross-region S3 serving, where every byte is expensive and low-traffic pods keep caches cold.

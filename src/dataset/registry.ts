@@ -315,6 +315,13 @@ function float64ToBytes(arr: Float64Array): Uint8Array {
 /** Rebuild a Float64Array from L2 bytes, copying to guarantee 8-byte alignment. */
 function bytesToFloat64(bytes: Uint8Array): Float64Array {
   const usable = bytes.byteLength - (bytes.byteLength % 8);
-  const copy = bytes.slice(0, usable); // fresh, 0-offset ArrayBuffer ⇒ aligned
-  return new Float64Array(copy.buffer, 0, usable / 8);
+  // Copy THIS view's byte range into a fresh ArrayBuffer. We must NOT use
+  // `bytes.slice(0, usable).buffer`: when `bytes` is a Node Buffer (e.g. ioredis
+  // `getBuffer`), Buffer overrides `slice` to return a VIEW into a shared/pooled
+  // ArrayBuffer with a non-zero `byteOffset`, so `new Float64Array(view.buffer, 0)`
+  // would read from offset 0 of the pool — garbage/shifted values. Likewise a
+  // plain Uint8Array can be a view with a non-zero offset. `ArrayBuffer.slice`
+  // always copies, honoring `byteOffset`, and yields a 0-offset, 8-aligned buffer.
+  const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + usable);
+  return new Float64Array(ab);
 }

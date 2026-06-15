@@ -177,4 +177,41 @@ describe("ManagedDataset — decodedArray L1/L2", () => {
     expect(storeB.chunkGets).toBe(0); // served from shared L2
     expect(coordinateCache.store.size).toBe(1);
   });
+
+  it("L2: round-trips correctly when the cache returns a pooled Node Buffer (ioredis getBuffer)", async () => {
+    // Regression: ioredis `getBuffer` returns Buffers carved from a shared pool —
+    // i.e. views with a NON-ZERO byteOffset into a larger ArrayBuffer. The L2
+    // deserializer must honor byteOffset; reading from offset 0 of the pool yields
+    // garbage/shifted values, which (for a decoded TIME axis) collapses to a
+    // non-ascending array and breaks the downstream time-window binary search.
+    const bufferCache: Cache & { store: Map<string, Uint8Array> } = {
+      store: new Map<string, Uint8Array>(),
+      async get(key) {
+        const v = this.store.get(key);
+        if (!v) return null;
+        // Put the bytes at a non-zero offset in a larger pooled Buffer and return
+        // a VIEW over them (what ioredis does). Offset 8 leaves zero-bytes before
+        // the data, so the old offset-0 read would return shifted/zeroed values.
+        const pool = Buffer.alloc(v.byteLength + 8);
+        Buffer.from(v.buffer, v.byteOffset, v.byteLength).copy(pool, 8);
+        return pool.subarray(8, 8 + v.byteLength);
+      },
+      async set(key, value) {
+        // Copy so the stored bytes are stable regardless of the caller's buffer.
+        this.store.set(key, new Uint8Array(value));
+      },
+    };
+    const reg = new ZarrDatasetRegistry({ coordinateCache: bufferCache });
+
+    const storeA = new MemStore(makeStoreData([10, 20, 30]));
+    const dsA = await reg.open("s3://x/runA.zarr", () => storeA);
+    await dsA.decodedArray("lat", { cacheKey: "domain-1" }); // populate L2
+
+    const storeB = new MemStore(makeStoreData([10, 20, 30]));
+    const dsB = await reg.open("s3://x/runB.zarr", () => storeB);
+    const b = await dsB.decodedArray("lat", { cacheKey: "domain-1" }); // served from the pooled L2 Buffer
+
+    expect(storeB.chunkGets).toBe(0); // came from L2, not the store
+    expect(Array.from(b)).toEqual([10, 20, 30]); // honored byteOffset — not garbage/shifted
+  });
 });
