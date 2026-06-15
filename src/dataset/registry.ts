@@ -278,7 +278,8 @@ export class ZarrDatasetRegistry {
     });
 
     const memoryCache =
-      this.options.chunkMemoryCacheBytes && this.options.chunkMemoryCacheBytes > 0
+      this.options.chunkMemoryCacheBytes &&
+      this.options.chunkMemoryCacheBytes > 0
         ? new MemoryCache({ maxBytes: this.options.chunkMemoryCacheBytes })
         : undefined;
 

@@ -4,7 +4,11 @@ import { ZarrGroup } from "./group.js";
 import type { Zattrs } from "./metadata/types.js";
 import type { ConsolidatedMetadata } from "./metadata/consolidated.js";
 import { parseConsolidatedMetadata } from "./metadata/consolidated.js";
-import { parseZarrayMeta, parseZgroupMeta, parseZattrs } from "./metadata/v2.js";
+import {
+  parseZarrayMeta,
+  parseZgroupMeta,
+  parseZattrs,
+} from "./metadata/v2.js";
 import { MetadataError, StoreError } from "./errors.js";
 import { codecRegistry } from "./codec/codec.js";
 import type { Cache } from "./cache/cache.js";
