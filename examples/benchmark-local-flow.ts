@@ -23,6 +23,20 @@
  * Rodar:
  *   npx tsx examples/benchmark-local-flow.ts
  *   ZARR_LOCAL_PATH=/caminho/data.zarr VERBOSE=1 npx tsx examples/benchmark-local-flow.ts
+ *
+ * Diagnóstico de produção (S3), separando GRADE × POINT (frio × quente):
+ *   # GRADE (time, lat, lon) — 1 chunk por ponto; cold-start + queries quentes:
+ *   MODE=s3-serving S3_BUCKET=i4sea-zarr S3_PREFIX=<...wrf3km.../...zarr> \
+ *     S3_REGION=us-east-1 DATA_VAR=wind_vel npx tsx examples/benchmark-local-flow.ts
+ *
+ *   # POINT (time, npoints) — array inteiro = 1 chunk; over-read por consulta:
+ *   MODE=s3-point S3_BUCKET=i4sea-zarr S3_PREFIX=<...wave.../...point...zarr> \
+ *     S3_REGION=us-east-1 DATA_VAR=<var_de_ponto> \
+ *     LAT_POINTS_VAR=lat_points LON_POINTS_VAR=lon_points \
+ *     npx tsx examples/benchmark-local-flow.ts
+ *
+ *   (use SKIP_REDIS=1 se não houver Redis local; S3_REGION deve casar com a região
+ *    do bucket — rode in-region para refletir a latência do pod.)
  */
 import {
   FileSystemStore,
@@ -35,6 +49,7 @@ import {
   type ReadOptions,
   type OpenOptions,
   type ObservabilityHooks,
+  type Slice,
 } from "../src/index.js";
 import { RedisCache } from "../src/redis/index.js";
 import { GridIndex } from "../src/spatial/grid-index.js";
@@ -67,6 +82,10 @@ const COORD_LAT = process.env.LAT_VAR ?? "lat";
 const COORD_LON = process.env.LON_VAR ?? "lon";
 const COORD_TIME = process.env.TIME_VAR ?? "time";
 const DATA_VAR = process.env.DATA_VAR ?? "wind_vel";
+
+// Coordenadas dos datasets POINT (time, npoints) — usadas pelo MODE=s3-point.
+const COORD_LAT_POINTS = process.env.LAT_POINTS_VAR ?? "lat_points";
+const COORD_LON_POINTS = process.env.LON_POINTS_VAR ?? "lon_points";
 
 // ──────────────────────────────────────────────────────────────────────────
 // Helpers de formatação / cronometragem
@@ -791,10 +810,160 @@ async function runS3Serving(probe: Probe): Promise<void> {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
+// S3 — DATASET POINT (time, npoints): array inteiro = 1 chunk
+// Testa a hipótese B do diagnóstico: como o converter chunka datasets POINT com
+// `npoints: -1` (e `time: -1`), o array inteiro vira UM chunk. Toda consulta de
+// ponto baixa + descomprime esse chunk inteiro para extrair 1 série. Aqui medimos
+// o tamanho do chunk, o custo de decode e o over-read ratio (bytes decodificados ÷
+// bytes úteis devolvidos), comparando frio (S3) × quente-disco (decode mantido) ×
+// quente-memória (decode pulado).
+// ──────────────────────────────────────────────────────────────────────────
+async function tryGetArray2(group: Awaited<ReturnType<typeof openGroup>>, name: string) {
+  try {
+    return await group.getArray(name);
+  } catch {
+    return null;
+  }
+}
+
+function toFloat64(typed: ArrayLike<number | bigint>): Float64Array {
+  const out = new Float64Array(typed.length);
+  for (let i = 0; i < typed.length; i++) out[i] = Number(typed[i]);
+  return out;
+}
+
+function findNearestPoint(
+  lat: Float64Array,
+  lon: Float64Array,
+  n: number,
+  targetLat: number,
+  targetLon: number,
+): { k: number; dist: number } {
+  const cosLat = Math.cos((targetLat * Math.PI) / 180);
+  let best = Infinity;
+  let bk = 0;
+  for (let k = 0; k < n; k++) {
+    const dLat = lat[k] - targetLat;
+    const dLon = (lon[k] - targetLon) * cosLat;
+    const d = dLat * dLat + dLon * dLon;
+    if (d < best) {
+      best = d;
+      bk = k;
+    }
+  }
+  return { k: bk, dist: Math.sqrt(best) * 111 };
+}
+
+/** Lê 1× medindo I/O de backend + decode, e devolve os contadores delta. */
+async function measuredRead(
+  label: string,
+  fn: () => Promise<{ length: number }>,
+  probe: Probe,
+  timing: TimingStore,
+): Promise<{ ms: number; returned: number; io: IoCounters; ev: Ev }> {
+  timing.reset();
+  probe.reset();
+  const { ms, value } = await timeit(fn);
+  const io = timing.snapshot();
+  const ev = probe.snapshot();
+  console.log(`  ${fmt(ms).padStart(8)}  ${label}`);
+  const parts: string[] = [];
+  if (io.gets || io.ranges) parts.push(`backend: ${io.gets}get/${io.ranges}range ${kib(io.getBytes)} (${fmt(io.getMs)})`);
+  if (ev.decodes) parts.push(`decode: ${ev.decodes}× ${kib(ev.decodedBytes)} ${fmt(ev.decodeMs)}`);
+  console.log(`            ${parts.join("  |  ")}`);
+  return { ms, returned: value.length, io, ev };
+}
+
+async function runS3Point(probe: Probe): Promise<void> {
+  hr("S3 — DATASET POINT (time, npoints) — array inteiro = 1 chunk");
+  console.log("  Hipótese B: cada consulta baixa + descomprime o array POINT inteiro p/ 1 série.");
+  console.log(`  coords: ${COORD_LAT_POINTS}/${COORD_LON_POINTS} (fallback ${COORD_LAT}/${COORD_LON} 1D) | data var: ${DATA_VAR}`);
+
+  const ro: ReadOptions = { observability: probe.hooks, concurrency: 50 };
+  const diskCacheDir = join(tmpdir(), `zarr-bench-point-${process.pid}`);
+
+  const store = new S3Store({
+    bucket: S3_BUCKET,
+    prefix: S3_PREFIX,
+    region: S3_REGION,
+    maxSockets: 128,
+    observability: probe.hooks,
+  });
+  await store.prewarm().catch(() => {});
+  const timing = new TimingStore(store);
+  const cached = new CachedStore(timing, {
+    cacheDir: diskCacheDir,
+    storeId: `point-${process.pid}`,
+    maxSizeBytes: 1024 ** 3,
+    observability: probe.hooks,
+  });
+
+  try {
+    const root = await stage("openGroup (metadata)", () => openGroup(cached, "", { observability: probe.hooks }), probe, timing);
+
+    // Coords de ponto (lat_points/lon_points), com fallback p/ lat/lon 1D.
+    const latArr = (await tryGetArray2(root, COORD_LAT_POINTS)) ?? (await tryGetArray2(root, COORD_LAT));
+    const lonArr = (await tryGetArray2(root, COORD_LON_POINTS)) ?? (await tryGetArray2(root, COORD_LON));
+    if (!latArr || !lonArr) {
+      console.log("  ⚠ sem coords de ponto (lat_points/lon_points nem lat/lon). Verifique LAT_POINTS_VAR/LON_POINTS_VAR.");
+      return;
+    }
+    if (latArr.shape.length !== 1) {
+      console.log(`  ⚠ "${COORD_LAT_POINTS}" não é 1D (shape=${JSON.stringify(latArr.shape)}). Este modo é p/ datasets POINT; use MODE=s3-serving p/ grades.`);
+      return;
+    }
+
+    const latData = toFloat64(
+      await stage(`coords ${COORD_LAT_POINTS} completo shape=${JSON.stringify(latArr.shape)}`, () => latArr.get(undefined, ro), probe, timing),
+    );
+    const lonData = toFloat64(await lonArr.get(undefined, ro));
+    const n = latData.length;
+
+    const target = Math.floor(n / 2);
+    const f = findNearestPoint(latData, lonData, n, latData[target], lonData[target]);
+
+    const dataArr = await root.getArray(DATA_VAR);
+    hr();
+    console.log(`  data var "${DATA_VAR}"  shape=${JSON.stringify(dataArr.shape)}  chunks=${JSON.stringify(dataArr.chunks)}  dtype=${dataArr.dtype}`);
+    if (dataArr.shape.length !== 2) {
+      console.log(`  ⚠ rank ${dataArr.shape.length} != 2 — este modo lê [tempo, ponto]. Para spectral/grade use outro DATA_VAR/MODE.`);
+      return;
+    }
+    const chunkElems = (dataArr.chunks as number[]).reduce((a, b) => a * b, 1);
+    console.log(`  → 1 chunk = ${chunkElems.toLocaleString()} elementos (${kib((chunkElems * 4))} se float32)`);
+    hr();
+
+    // Pass 1 — FRIO: baixa do S3 + popula disco. Pass 2 — quente disco (decode mantido).
+    // Pass 3 — quente memória (decode também pulado).
+    const memoryCache = new MemoryCache({ maxBytes: 512 * 1024 * 1024 });
+    const sel: Slice = [null, f.k];
+    const cold = await measuredRead(`Pass 1 FRIO  "${DATA_VAR}"[:, ${f.k}] (S3 + decode)`, () => dataArr.get(sel, ro), probe, timing);
+    const warmDisk = await measuredRead(`Pass 2 disco "${DATA_VAR}"[:, ${f.k}] (backend=0, decode mantido)`, () => dataArr.get(sel, ro), probe, timing);
+    const roMem: ReadOptions = { ...ro, memoryCache };
+    await measuredRead(`Pass 3 mem 1ª "${DATA_VAR}"[:, ${f.k}] (popula MemoryCache)`, () => dataArr.get(sel, roMem), probe, timing);
+    const warmMem = await measuredRead(`Pass 4 mem 2ª "${DATA_VAR}"[:, ${f.k}] (decode pulado)`, () => dataArr.get(sel, roMem), probe, timing);
+
+    // Over-read: bytes decodificados (chunk inteiro) ÷ bytes úteis (série devolvida).
+    const returnedBytes = Math.max(1, cold.returned * 4);
+    const overRead = Math.round((cold.io.getBytes + cold.ev.decodedBytes) / returnedBytes);
+    hr("RESULTADO — custo de 1 consulta de ponto num dataset POINT");
+    console.log(`  ponto k=${f.k}/${n}  dist≈${f.dist.toFixed(2)}km  | série devolvida = ${cold.returned} valores (${kib(returnedBytes)})`);
+    console.log(`  FRIO (S3+decode) ............ ${fmt(cold.ms)}   (baixou ${kib(cold.io.getBytes)}, decodificou ${kib(cold.ev.decodedBytes)})`);
+    console.log(`  quente disco (só decode) .... ${fmt(warmDisk.ms)}   (decode ${kib(warmDisk.ev.decodedBytes)} — pago a CADA request sem MemoryCache)`);
+    console.log(`  quente memória (nada) ....... ${fmt(warmMem.ms)}`);
+    console.log(`\n  → OVER-READ RATIO = ${overRead}× — bytes movidos/decodificados por valor útil devolvido.`);
+    console.log("    Ratio alto = o chunk único do dataset POINT é desproporcional ao ponto pedido.");
+    console.log("    Nota: o nautilus NÃO passa MemoryCache hoje → paga o 'quente disco' (decode) por request.");
+  } finally {
+    await rm(diskCacheDir, { recursive: true, force: true });
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
 // main
 // ──────────────────────────────────────────────────────────────────────────
 async function main(): Promise<void> {
-  hr("zarr-node — Benchmark do fluxo + caches (local / s3 / s3-ab / s3-serving)");
+  hr("zarr-node — Benchmark do fluxo + caches (local / s3 / s3-ab / s3-serving / s3-point)");
   console.log(`  MODE=${MODE}  | coord vars: ${COORD_LAT}/${COORD_LON}/${COORD_TIME}  | data var: ${DATA_VAR}`);
   console.log(`  VERBOSE=${VERBOSE}  SKIP_REDIS=${SKIP_REDIS}`);
 
@@ -811,6 +980,13 @@ async function main(): Promise<void> {
   if (MODE === "s3-serving") {
     await runS3Serving(probe);
     hr("FIM — padrão de serviço concluído");
+    return;
+  }
+
+  // MODE=s3-point: dataset POINT (time, npoints) — over-read do chunk único.
+  if (MODE === "s3-point") {
+    await runS3Point(probe);
+    hr("FIM — diagnóstico de dataset POINT concluído");
     return;
   }
 
