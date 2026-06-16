@@ -336,6 +336,38 @@ A throwing (or rejecting) handler is swallowed and never breaks a read. When
 no hooks are registered there is zero overhead — payload objects are not even
 allocated.
 
+### Offloading decompression (worker threads)
+
+Blosc decode is synchronous CPU work (it runs on WASM), so a large chunk blocks
+the event loop for the whole decode — degrading the latency of *every* other
+request in a shared API pod. `gzip`/`zlib` already run on the libuv threadpool
+and are unaffected.
+
+Opt in by passing a `DecodePool` via `decodeWorkers`. Chunks whose compressor is
+offloadable (currently Blosc) and whose compressed size is at least `minBytes`
+are decoded on a worker thread; everything else decodes inline as before. Create
+one pool per process, reuse it across reads, and call `terminate()` on shutdown
+(idle workers keep the process alive).
+
+```typescript
+import { DecodePool, open } from "@i4sea/zarr-node";
+
+const decodeWorkers = new DecodePool({
+  poolSize: 4,          // default: availableParallelism() - 1
+  minBytes: 256 * 1024, // skip offload below this compressed size (IPC isn't worth it)
+});
+
+const array = await open(store, "wind_vel");
+const data = await array.get(selection, { decodeWorkers });
+// ... on shutdown:
+await decodeWorkers.terminate();
+```
+
+The threshold is on the *compressed* size (known before decode). Use
+`onChunkDecoded` (above) to measure `decodeMs` with and without the pool and
+calibrate `minBytes` for your datasets; `examples/benchmark-decode-workers.ts`
+runs that A/B and also reports event-loop lag.
+
 ### Reference filesystem (kerchunk)
 
 ```typescript

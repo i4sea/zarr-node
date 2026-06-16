@@ -20,6 +20,7 @@ const expected = [
   "openArray",
   "openGroup",
   "codecRegistry",
+  "DecodePool",
   "ZarrError",
   "MetadataError",
   "StoreError",
@@ -43,6 +44,20 @@ if (data.length !== 100 || Math.abs(data[42] - 42) > 1e-5) {
   process.exit(1);
 }
 
+// Worker-offloaded decode: spawn a real worker thread (minBytes:0 forces
+// offload of the small fixture chunk) and verify the Blosc decode round-trips.
+const pool = new pkg.DecodePool({ poolSize: 1, minBytes: 0 });
+try {
+  const arrW = await pkg.openArray(store);
+  const dataW = await arrW.get(undefined, { decodeWorkers: pool });
+  if (dataW.length !== 100 || Math.abs(dataW[42] - 42) > 1e-5) {
+    console.error("ESM DecodePool read FAILED. Got length", dataW.length, "data[42]=", dataW[42]);
+    process.exit(1);
+  }
+} finally {
+  await pool.terminate();
+}
+
 console.log(
-  `ESM interop OK (${expected.length} exports present, Blosc decode verified)`,
+  `ESM interop OK (${expected.length} exports present, Blosc decode + worker offload verified)`,
 );

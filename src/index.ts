@@ -30,6 +30,8 @@ export type { ReferenceStoreOptions } from "./store/reference.js";
 export type { ReferenceSpec } from "./metadata/reference-spec.js";
 export type { Codec, CodecFactory, CodecRegistry } from "./codec/codec.js";
 export { codecRegistry } from "./codec/codec.js";
+export { DecodePool } from "./codec/decode-pool.js";
+export type { DecodePoolOptions } from "./codec/decode-pool.js";
 export type {
   CompressorConfig,
   FilterConfig,
