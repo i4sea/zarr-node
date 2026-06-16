@@ -19,6 +19,24 @@ export interface Store {
     offset: number,
     length: number,
   ): Promise<Uint8Array | null>;
+  /**
+   * Fetch object metadata (ETag / last-modified / size) without the body.
+   * Optional — intended as a cheap content-version probe for cache keying: a
+   * changed ETag means the object was overwritten in place, so consumers can
+   * fold it into a cache key to invalidate every tier on re-ingestion. `null`
+   * means the key is absent; other failures MUST throw (e.g. `StoreError`).
+   */
+  head?(key: string): Promise<StoreHead | null>;
+}
+
+/** Object metadata returned by {@link Store.head}. */
+export interface StoreHead {
+  /** Entity tag as returned by the backend (may be quoted), or null. */
+  etag: string | null;
+  /** Last-modified time, or null when the backend omits it. */
+  lastModified: Date | null;
+  /** Object size in bytes, or null when unknown. */
+  size: number | null;
 }
 
 export interface FileSystemStoreOptions {
