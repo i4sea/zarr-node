@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`Store.head(key)`** (optional) + `S3Store.head` implementation, returning `{ etag, lastModified, size } | null` (`null` for an absent key; other failures throw, mirroring `has()`'s retry/404 handling). Intended as a cheap content-version probe: a changed ETag means the object was overwritten in place, so consumers can fold it into a cache key to invalidate cached state on re-ingestion. This closes the gap where a dataset re-written at the same path (same `open()` id) kept serving stale handle/metadata/coordinate state — the registry assumes immutability per id, which an overwrite violates.
+- **`DecodePool`** (root export) for off-thread chunk decoding. Blosc decode is synchronous CPU work (runs on WASM), so a large chunk blocks the event loop for the whole decode, degrading the latency of every other request in a shared API pod. Pass a `DecodePool` via the new `decodeWorkers` read option: chunks whose compressor is offloadable (currently Blosc) and whose *compressed* size is at least `minBytes` decode on a worker thread; everything else decodes inline as before. Create one pool per process, reuse it across reads, and call `terminate()` on shutdown. See the README ("Offloading decompression") and `examples/benchmark-decode-workers.ts` for A/B calibration of `minBytes`.
 
 ## [0.7.1] — 2026-06-15
 
