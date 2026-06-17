@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] — 2026-06-16
+
+### Added
+
+- **`Store.head(key)`** (optional) + `S3Store.head` implementation, returning `{ etag, lastModified, size } | null` (`null` for an absent key; other failures throw, mirroring `has()`'s retry/404 handling). Intended as a cheap content-version probe: a changed ETag means the object was overwritten in place, so consumers can fold it into a cache key to invalidate cached state on re-ingestion. This closes the gap where a dataset re-written at the same path (same `open()` id) kept serving stale handle/metadata/coordinate state — the registry assumes immutability per id, which an overwrite violates.
+
 ## [0.7.1] — 2026-06-15
 
 ### Fixed

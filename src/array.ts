@@ -1,6 +1,7 @@
 import type { Store } from "./store/store.js";
 import type { ZarrayMeta, Zattrs } from "./metadata/types.js";
 import type { Codec } from "./codec/codec.js";
+import type { DecodePool } from "./codec/decode-pool.js";
 import type { TypedArray } from "./dtype.js";
 import type { MemoryCache } from "./cache/memory.js";
 import type { ObservabilityHooks } from "./observability.js";
@@ -73,6 +74,13 @@ export interface ReadOptions {
    * zeros when `fill_value` is 0 or null). Default: false.
    */
   strict?: boolean;
+  /**
+   * Opt-in worker-thread pool for offloading heavy synchronous decompression
+   * (Blosc) off the event loop. When omitted, chunks decode inline as before.
+   * Create one `DecodePool` per process and reuse it across reads; the caller
+   * owns its lifecycle (`terminate()`).
+   */
+  decodeWorkers?: DecodePool;
 }
 
 export type Slice = (number | [number, number] | null)[];
@@ -85,6 +93,7 @@ interface ResolvedReadContext {
   warnBytes: number;
   hooks: ObservabilityHooks | undefined;
   strict: boolean;
+  decodePool: DecodePool | null;
 }
 
 export class ZarrArray {
@@ -167,6 +176,7 @@ export class ZarrArray {
         options?.largeReadWarningBytes ?? DEFAULT_LARGE_READ_WARNING_BYTES,
       hooks,
       strict: options?.strict ?? false,
+      decodePool: options?.decodeWorkers ?? null,
     };
 
     if (selection !== undefined) {
@@ -240,6 +250,7 @@ export class ZarrArray {
 
   private async getFull(ctx: ResolvedReadContext): Promise<TypedArray> {
     const { concurrency, memoryCache, limiter, warnBytes, hooks, strict } = ctx;
+    const decodePool = ctx.decodePool;
     const ndim = this.shape.length;
     const ranges = computeChunkRanges(this.shape, this.chunks);
     const byteSize = dtypeByteSize(this.dtype);
@@ -276,6 +287,8 @@ export class ZarrArray {
         peakPerChunk: this.peakPerChunk(chunkByteSize),
         observability: hooks,
         strict,
+        decodePool,
+        compressorConfig: this.meta.compressor,
       },
       (chunk: LoadedChunk) => {
         const chunkTyped = this.toTypedChunk(
@@ -351,6 +364,7 @@ export class ZarrArray {
     ctx: ResolvedReadContext,
   ): Promise<TypedArray> {
     const { concurrency, memoryCache, limiter, warnBytes, hooks, strict } = ctx;
+    const decodePool = ctx.decodePool;
     const ndim = this.shape.length;
     const ranges = normalizeSelection(selection, this.shape);
     const byteSize = dtypeByteSize(this.dtype);
@@ -405,6 +419,8 @@ export class ZarrArray {
         peakPerChunk: this.peakPerChunk(chunkByteSize),
         observability: hooks,
         strict,
+        decodePool,
+        compressorConfig: this.meta.compressor,
       },
       (chunk: LoadedChunk) => {
         const chunkTyped = this.toTypedChunk(

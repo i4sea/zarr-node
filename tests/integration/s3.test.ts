@@ -237,6 +237,18 @@ describe("S3Store — retry and timeout (local fake S3)", () => {
           return;
         }
 
+        if (urlPath.includes("head-ok-key")) {
+          // HEAD: metadata-only response (no body) for the head() probe.
+          res.writeHead(200, {
+            "Content-Type": "application/octet-stream",
+            "Content-Length": "42",
+            ETag: '"etag-abc123"',
+            "Last-Modified": "Mon, 16 Jun 2026 12:00:00 GMT",
+          });
+          res.end();
+          return;
+        }
+
         if (urlPath.includes("hang-key")) {
           // Never respond — exercises the per-operation timeout abort
           return;
@@ -300,6 +312,22 @@ describe("S3Store — retry and timeout (local fake S3)", () => {
     const store = makeStore();
     const data = await store.get("missing-key");
     expect(data).toBeNull();
+    expect(notFoundCounter).toBe(1);
+  });
+
+  it("head() returns ETag / last-modified / size for an existing key", async () => {
+    const store = makeStore();
+    const meta = await store.head("head-ok-key");
+    expect(meta).not.toBeNull();
+    expect(meta?.etag).toBe('"etag-abc123"');
+    expect(meta?.size).toBe(42);
+    expect(meta?.lastModified).toBeInstanceOf(Date);
+  });
+
+  it("head() returns null for a missing key (no throw)", async () => {
+    notFoundCounter = 0;
+    const store = makeStore();
+    expect(await store.head("missing-key")).toBeNull();
     expect(notFoundCounter).toBe(1);
   });
 

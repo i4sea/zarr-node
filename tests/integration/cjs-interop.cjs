@@ -18,6 +18,7 @@ const expected = [
   "openArray",
   "openGroup",
   "codecRegistry",
+  "DecodePool",
   "ZarrError",
   "MetadataError",
   "StoreError",
@@ -58,8 +59,23 @@ if (typeof pkg.codecRegistry?.has !== "function") {
     console.error("CJS Blosc read FAILED. Got length", data.length, "data[42]=", data[42]);
     process.exit(1);
   }
+
+  // Worker-offloaded decode: spawn a real worker thread (minBytes:0 forces
+  // offload) and verify the Blosc decode round-trips under the CJS build.
+  const pool = new pkg.DecodePool({ poolSize: 1, minBytes: 0 });
+  try {
+    const arrW = await pkg.openArray(store);
+    const dataW = await arrW.get(undefined, { decodeWorkers: pool });
+    if (dataW.length !== 100 || Math.abs(dataW[42] - 42) > 1e-5) {
+      console.error("CJS DecodePool read FAILED. Got length", dataW.length, "data[42]=", dataW[42]);
+      process.exit(1);
+    }
+  } finally {
+    await pool.terminate();
+  }
+
   console.log(
-    `CJS interop OK (${expected.length} exports present, Blosc decode verified)`,
+    `CJS interop OK (${expected.length} exports present, Blosc decode + worker offload verified)`,
   );
 })().catch((err) => {
   console.error("CJS interop FAILED with exception:", err);

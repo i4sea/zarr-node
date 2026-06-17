@@ -7,7 +7,7 @@ import {
   executeWithRetry,
   isRetryable,
 } from "./retry.js";
-import type { Store, S3StoreOptions } from "./store.js";
+import type { Store, S3StoreOptions, StoreHead } from "./store.js";
 
 // Dynamic import helper — @aws-sdk/client-s3 is an optional peer dependency
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -110,6 +110,43 @@ export class S3Store implements Store {
       return true;
     } catch (err) {
       if (isNotFound(err)) return false;
+      if (err instanceof RetryExhaustedError) {
+        throw new StoreError(
+          `S3 HEAD s3://${this.bucket}/${fullKey} ${err.message}`,
+        );
+      }
+      throw new StoreError(
+        `S3 HEAD s3://${this.bucket}/${fullKey} failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  async head(key: string): Promise<StoreHead | null> {
+    const client = await this.getClient();
+    const fullKey = this.resolveKey(key);
+    const onRetry = this.hooks?.onRetry;
+
+    try {
+      const response = await executeWithRetry(
+        async () => {
+          const sdk = await loadS3SDK();
+          return client.send(
+            new sdk.HeadObjectCommand({ Bucket: this.bucket, Key: fullKey }),
+            { abortSignal: AbortSignal.timeout(this.timeout) },
+          );
+        },
+        {
+          maxRetries: this.maxRetries,
+          onRetry: onRetry ? (e) => safeInvoke(onRetry, e) : undefined,
+        },
+      );
+      return {
+        etag: response.ETag ?? null,
+        lastModified: response.LastModified ?? null,
+        size: response.ContentLength ?? null,
+      };
+    } catch (err) {
+      if (isNotFound(err)) return null;
       if (err instanceof RetryExhaustedError) {
         throw new StoreError(
           `S3 HEAD s3://${this.bucket}/${fullKey} ${err.message}`,
