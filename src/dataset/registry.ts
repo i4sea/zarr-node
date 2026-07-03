@@ -51,6 +51,17 @@ export interface ZarrDatasetRegistryOptions {
    * Worst-case heap ≈ `maxDatasets × this` (only hot datasets fill it).
    */
   chunkMemoryCacheBytes?: number;
+  /**
+   * TTL in ms for shared metadata (`metadataCache`) writes. Omit ⇒ no expiry.
+   *
+   * Set this when `id`s are content-versioned (e.g. `s3Path@<etag>`): each
+   * re-ingestion produces a new id, so its `.zmetadata`/`.zarray` keys would
+   * otherwise accumulate in the shared cache forever. A TTL lets obsolete
+   * versions' keys expire once they stop being read. Eviction from the handle
+   * LRU tears down heap and disk immediately, but the shared metadata cache is
+   * process-external, so a TTL is the mechanism that bounds its growth.
+   */
+  metadataCacheTtlMs?: number;
   /** Disk chunk cache. Omit to skip the on-disk tier. */
   disk?: {
     cacheDir: string;
@@ -193,6 +204,21 @@ export class ManagedDataset {
     }
     return out;
   }
+
+  /**
+   * Release this dataset's in-process caches deterministically. Called by the
+   * registry on eviction so heap is freed immediately instead of waiting for GC
+   * to collect the whole handle. Safe to call more than once. Does NOT touch
+   * disk or the shared metadata cache — those are torn down by the registry,
+   * which owns their handles.
+   */
+  releaseHeap(): void {
+    this.memoryCache?.clear();
+    this.decoded.clear();
+    // In-flight decodes clean themselves up in their own `finally`; clearing
+    // here just drops our reference so a pending map doesn't pin the handle.
+    this.decodedInflight.clear();
+  }
 }
 
 /**
@@ -203,6 +229,12 @@ export class ZarrDatasetRegistry {
   private readonly maxDatasets: number;
   private readonly entries = new Map<string, ManagedDataset>();
   private readonly inflight = new Map<string, Promise<ManagedDataset>>();
+  /**
+   * The disk-backed `CachedStore` per live dataset id, kept in lockstep with
+   * {@link entries} so eviction can call `clearCache()` to remove the id's
+   * on-disk directory. Only populated when a disk tier is configured.
+   */
+  private readonly stores = new Map<string, CachedStore>();
 
   constructor(private readonly options: ZarrDatasetRegistryOptions = {}) {
     this.maxDatasets = options.maxDatasets ?? 32;
@@ -236,10 +268,11 @@ export class ZarrDatasetRegistry {
     if (existing) return existing;
 
     const promise = this.build(id, storeFactory)
-      .then((ds) => {
-        this.entries.set(id, ds);
+      .then(({ dataset, store }) => {
+        this.entries.set(id, dataset);
+        if (store) this.stores.set(id, store);
         this.evictIfOverCap();
-        return ds;
+        return dataset;
       })
       .finally(() => {
         this.inflight.delete(id);
@@ -248,21 +281,32 @@ export class ZarrDatasetRegistry {
     return promise;
   }
 
-  /** Drop all cached handles (e.g. on shutdown / tests). */
-  clear(): void {
+  /**
+   * Drop all cached handles and tear down their caches (e.g. on shutdown /
+   * tests). Releases heap synchronously and best-effort removes every dataset's
+   * disk directory. The returned promise resolves once disk teardown settles;
+   * you can ignore it (heap is freed regardless) or await it in tests.
+   */
+  clear(): Promise<void> {
+    const teardowns: Array<Promise<void>> = [];
+    for (const id of [...this.entries.keys()]) {
+      teardowns.push(this.teardown(id));
+    }
     this.entries.clear();
+    this.stores.clear();
     this.inflight.clear();
+    return Promise.all(teardowns).then(() => undefined);
   }
 
   private async build(
     id: string,
     storeFactory: StoreFactory,
-  ): Promise<ManagedDataset> {
+  ): Promise<{ dataset: ManagedDataset; store: CachedStore | undefined }> {
     const backend = await storeFactory();
-    const { metadataCache, coordinateCache, observability, disk } =
+    const { metadataCache, metadataCacheTtlMs, coordinateCache, observability, disk } =
       this.options;
 
-    const store: Store = disk
+    const cachedStore: CachedStore | undefined = disk
       ? new CachedStore(backend, {
           cacheDir: disk.cacheDir,
           storeId: id,
@@ -270,10 +314,13 @@ export class ZarrDatasetRegistry {
           ttl: disk.ttl,
           observability,
         })
-      : backend;
+      : undefined;
+    const store: Store = cachedStore ?? backend;
 
     const group = await openGroup(store, "", {
-      ...(metadataCache ? { metadataCache, storeId: id } : {}),
+      ...(metadataCache
+        ? { metadataCache, storeId: id, metadataCacheTtlMs }
+        : {}),
       ...(observability ? { observability } : {}),
     });
 
@@ -283,21 +330,44 @@ export class ZarrDatasetRegistry {
         ? new MemoryCache({ maxBytes: this.options.chunkMemoryCacheBytes })
         : undefined;
 
-    return new ManagedDataset(
+    const dataset = new ManagedDataset(
       id,
       group,
       memoryCache,
       coordinateCache,
       observability,
     );
+    return { dataset, store: cachedStore };
   }
 
   private evictIfOverCap(): void {
     while (this.entries.size > this.maxDatasets) {
       const oldest = this.entries.keys().next();
       if (oldest.done) break;
+      // Tear down BEFORE dropping the Map refs: releases heap immediately and
+      // removes the id's disk directory. The shared metadata cache is bounded
+      // separately via `metadataCacheTtlMs` (it is process-external and cannot
+      // be enumerated by id here).
+      void this.teardown(oldest.value);
       this.entries.delete(oldest.value);
+      this.stores.delete(oldest.value);
     }
+  }
+
+  /**
+   * Release an evicted dataset's caches: heap synchronously, disk directory
+   * best-effort. Never throws — disk teardown failures are swallowed so an
+   * eviction can't break an ongoing open. Does not mutate {@link entries} /
+   * {@link stores}; the caller drops those refs.
+   */
+  private teardown(id: string): Promise<void> {
+    this.entries.get(id)?.releaseHeap();
+    const store = this.stores.get(id);
+    if (!store) return Promise.resolve();
+    return store.clearCache().catch(() => {
+      // Disk teardown is best-effort; a failed rm just leaves the directory,
+      // which is still bounded by the disk cache's own maxSizeBytes.
+    });
   }
 }
 

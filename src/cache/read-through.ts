@@ -13,6 +13,13 @@ export interface MetadataCacheContext {
   cache: Cache;
   storeId: string;
   observability?: ObservabilityHooks;
+  /**
+   * TTL in ms for metadata writes. Omit ⇒ no expiry (keys live forever).
+   * Set this when the `storeId` is content-versioned (e.g. `path@<etag>`) so a
+   * new version's keys don't accumulate in a shared cache (e.g. Redis) forever —
+   * each write refreshes the TTL, and stale versions expire once unreferenced.
+   */
+  ttlMs?: number;
 }
 
 /**
@@ -59,7 +66,7 @@ export async function readMetadataThrough(
   }
   const data = await store.get(key);
   try {
-    await ctx.cache.set(scoped, data ?? ABSENT);
+    await ctx.cache.set(scoped, data ?? ABSENT, ctx.ttlMs);
   } catch {
     // cache write failure must not affect the read (FR-011)
   }

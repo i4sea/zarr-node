@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { mkdtemp, rm, readdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ZarrDatasetRegistry } from "../../src/dataset/registry.js";
 import type { Store } from "../../src/store/store.js";
 import type { Cache } from "../../src/cache/cache.js";
@@ -213,5 +216,115 @@ describe("ManagedDataset — decodedArray L1/L2", () => {
 
     expect(storeB.chunkGets).toBe(0); // came from L2, not the store
     expect(Array.from(b)).toEqual([10, 20, 30]); // honored byteOffset — not garbage/shifted
+  });
+});
+
+describe("ZarrDatasetRegistry — eviction teardown (issue #12)", () => {
+  it("releases the evicted dataset's decoded-chunk heap cache", async () => {
+    const reg = new ZarrDatasetRegistry({
+      maxDatasets: 1,
+      chunkMemoryCacheBytes: 1024 * 1024,
+    });
+
+    const dsA = await reg.open("A", () => new MemStore(makeStoreData([1, 2, 3])));
+    await dsA.read("lat"); // populate A's memoryCache
+    expect(dsA.memoryCache!.size).toBeGreaterThan(0);
+
+    // Opening B evicts A → A's heap caches must be cleared, not left for GC.
+    await reg.open("B", () => new MemStore(makeStoreData([4, 5, 6])));
+
+    expect(dsA.memoryCache!.size).toBe(0);
+    expect(dsA.memoryCache!.totalBytes).toBe(0);
+  });
+
+  it("removes the evicted dataset's disk cache directory", async () => {
+    const cacheDir = await mkdtemp(join(tmpdir(), "zarr-evict-"));
+    try {
+      const reg = new ZarrDatasetRegistry({
+        maxDatasets: 1,
+        disk: { cacheDir, maxSizeBytes: 10 * 1024 * 1024 },
+      });
+
+      const dsA = await reg.open("A", () => new MemStore(makeStoreData([1, 2, 3])));
+      await dsA.read("lat"); // writes a chunk to A's disk directory
+      expect((await readdir(cacheDir)).length).toBe(1); // one hashed store dir
+
+      // Evict A by opening B; A's disk directory must be torn down.
+      const dsB = await reg.open("B", () => new MemStore(makeStoreData([4, 5, 6])));
+      await dsB.read("lat");
+
+      // A's dir removed, B's remains → still exactly one hashed dir.
+      const dirs = await readdir(cacheDir);
+      expect(dirs.length).toBe(1);
+    } finally {
+      await rm(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  it("clear() releases heap and wipes all disk directories", async () => {
+    const cacheDir = await mkdtemp(join(tmpdir(), "zarr-clear-"));
+    try {
+      const reg = new ZarrDatasetRegistry({
+        maxDatasets: 4,
+        disk: { cacheDir, maxSizeBytes: 10 * 1024 * 1024 },
+      });
+
+      const dsA = await reg.open("A", () => new MemStore(makeStoreData([1, 2, 3])));
+      const dsB = await reg.open("B", () => new MemStore(makeStoreData([4, 5, 6])));
+      await dsA.read("lat");
+      await dsB.read("lat");
+      expect((await readdir(cacheDir)).length).toBe(2);
+
+      await reg.clear();
+
+      expect(reg.size).toBe(0);
+      expect(await readdir(cacheDir)).toEqual([]);
+    } finally {
+      await rm(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  it("writes metadata with the configured TTL when metadataCacheTtlMs is set", async () => {
+    const ttls: Array<number | undefined> = [];
+    const cache: Cache = {
+      store: new Map<string, Uint8Array>(),
+      async get(this: { store: Map<string, Uint8Array> }, key) {
+        return this.store.get(key) ?? null;
+      },
+      async set(this: { store: Map<string, Uint8Array> }, key, value, ttlMs) {
+        ttls.push(ttlMs);
+        this.store.set(key, value);
+      },
+    } as Cache & { store: Map<string, Uint8Array> };
+
+    const reg = new ZarrDatasetRegistry({
+      metadataCache: cache,
+      metadataCacheTtlMs: 60_000,
+    });
+    await reg.open("s3://x/ds.zarr", () => new MemStore(makeStoreData([1, 2, 3])));
+
+    // Every metadata write went through with the configured TTL.
+    expect(ttls.length).toBeGreaterThan(0);
+    expect(ttls.every((t) => t === 60_000)).toBe(true);
+  });
+
+  it("writes metadata with no TTL by default (unchanged behavior)", async () => {
+    const ttls: Array<number | undefined> = [];
+    const cache: Cache = {
+      store: new Map<string, Uint8Array>(),
+      async get(this: { store: Map<string, Uint8Array> }, key) {
+        return this.store.get(key) ?? null;
+      },
+      async set(this: { store: Map<string, Uint8Array> }, key, value, ttlMs) {
+        ttls.push(ttlMs);
+        this.store.set(key, value);
+      },
+    } as Cache & { store: Map<string, Uint8Array> };
+
+    const reg = new ZarrDatasetRegistry({ metadataCache: cache });
+    await reg.open("s3://x/ds.zarr", () => new MemStore(makeStoreData([1, 2, 3])));
+
+    expect(ttls.length).toBeGreaterThan(0);
+    expect(ttls.every((t) => t === undefined)).toBe(true);
   });
 });

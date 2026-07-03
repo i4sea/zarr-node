@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Dataset eviction now tears down its caches (issue #12).** `ZarrDatasetRegistry` evicting a handle past `maxDatasets` previously dropped only the `Map` reference, leaking the disk and shared-metadata tiers (both keyed by dataset `id`). With content-versioned ids (e.g. `s3Path@<etag>`), every re-ingestion left a permanent disk directory and a permanent set of Redis `.zmetadata`/`.zarray` keys — unbounded growth. Eviction (and `clear()`) now: releases the per-dataset decoded-chunk `MemoryCache` and decoded-array heap caches synchronously (freeing heap deterministically rather than at GC's discretion), and best-effort removes the evicted id's disk-cache directory via `CachedStore.clearCache()`. `ZarrDatasetRegistry.clear()` now returns a `Promise<void>` that settles once disk teardown completes (previously `void`; ignoring it is still safe — heap is freed synchronously).
+
+### Added
+
+- **`metadataCacheTtlMs`** on `ZarrDatasetRegistryOptions` (and the underlying `OpenOptions`), applied to shared-metadata (`metadataCache`) writes. Omit ⇒ no expiry (unchanged). Set it alongside content-versioned ids so obsolete versions' metadata keys expire from a shared cache (e.g. Redis) instead of accumulating forever — the shared cache is process-external and can't be enumerated by id on eviction, so a TTL is what bounds its growth.
+
 ## [0.7.2] — 2026-06-16
 
 ### Added
