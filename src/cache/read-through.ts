@@ -16,8 +16,15 @@ export interface MetadataCacheContext {
   /**
    * TTL in ms for metadata writes. Omit ⇒ no expiry (keys live forever).
    * Set this when the `storeId` is content-versioned (e.g. `path@<etag>`) so a
-   * new version's keys don't accumulate in a shared cache (e.g. Redis) forever —
-   * each write refreshes the TTL, and stale versions expire once unreferenced.
+   * new version's keys don't accumulate in a shared cache (e.g. Redis) forever.
+   *
+   * The TTL is (re)stamped only on a cache MISS — i.e. when a version is first
+   * read (per pod / after a handle is evicted and reopened). It is NOT refreshed
+   * on a hit: since content-versioned metadata is immutable, a version's keys
+   * expire `ttlMs` after the last MISS, not after the last read. Size the TTL
+   * comfortably above your re-ingestion cadence so a version that is still being
+   * opened is re-cached before it lapses; the cost of a lapse is a store round-
+   * trip (re-fetch + re-cache), never stale data.
    */
   ttlMs?: number;
 }

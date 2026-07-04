@@ -2,9 +2,15 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, rm, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { ZarrDatasetRegistry } from "../../src/dataset/registry.js";
 import type { Store } from "../../src/store/store.js";
 import type { Cache } from "../../src/cache/cache.js";
+
+/** The hashed directory name DiskCache derives for a given store id. */
+function diskDirFor(id: string): string {
+  return createHash("sha256").update(id).digest("hex").slice(0, 16);
+}
 
 // ── minimal in-memory store with one uncompressed float64 array `lat` ────────
 function makeStoreData(values: number[]): Map<string, Uint8Array> {
@@ -50,16 +56,23 @@ class MemStore implements Store {
   }
 }
 
-function fakeCache(): Cache & { store: Map<string, Uint8Array>; gets: number } {
+function fakeCache(): Cache & {
+  store: Map<string, Uint8Array>;
+  gets: number;
+  /** TTL (ms) passed to each `set`, in call order — `undefined` = no TTL. */
+  ttls: Array<number | undefined>;
+} {
   const store = new Map<string, Uint8Array>();
   return {
     store,
     gets: 0,
+    ttls: [],
     async get(key) {
       this.gets++;
       return store.get(key) ?? null;
     },
-    async set(key, value) {
+    async set(key, value, ttlMs) {
+      this.ttls.push(ttlMs);
       store.set(key, value);
     },
   };
@@ -247,15 +260,43 @@ describe("ZarrDatasetRegistry — eviction teardown (issue #12)", () => {
 
       const dsA = await reg.open("A", () => new MemStore(makeStoreData([1, 2, 3])));
       await dsA.read("lat"); // writes a chunk to A's disk directory
-      expect((await readdir(cacheDir)).length).toBe(1); // one hashed store dir
+      expect(await readdir(cacheDir)).toEqual([diskDirFor("A")]);
 
-      // Evict A by opening B; A's disk directory must be torn down.
+      // Evict A by opening B; A's specific directory must be torn down and
+      // B's created — asserting on the exact hashed names, not just the count,
+      // so removing the wrong dir can't pass.
       const dsB = await reg.open("B", () => new MemStore(makeStoreData([4, 5, 6])));
       await dsB.read("lat");
+      await reg.whenTornDown(); // eviction teardown of A runs in the background
 
-      // A's dir removed, B's remains → still exactly one hashed dir.
-      const dirs = await readdir(cacheDir);
-      expect(dirs.length).toBe(1);
+      expect(await readdir(cacheDir)).toEqual([diskDirFor("B")]);
+    } finally {
+      await rm(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  it("serializes a re-open against the evicted id's in-flight disk teardown", async () => {
+    const cacheDir = await mkdtemp(join(tmpdir(), "zarr-reopen-"));
+    try {
+      const reg = new ZarrDatasetRegistry({
+        maxDatasets: 1,
+        disk: { cacheDir, maxSizeBytes: 10 * 1024 * 1024 },
+      });
+
+      // A is opened, cached to disk, then evicted by B (teardown of A's dir
+      // starts). Immediately re-open A (same id ⇒ same hashed dir) and cache a
+      // chunk. If the re-open didn't wait for A's teardown, the in-flight `rm`
+      // could delete the freshly-written chunk.
+      const dsA1 = await reg.open("A", () => new MemStore(makeStoreData([1, 2, 3])));
+      await dsA1.read("lat");
+      await reg.open("B", () => new MemStore(makeStoreData([4, 5, 6])));
+      const dsA2 = await reg.open("A", () => new MemStore(makeStoreData([1, 2, 3])));
+      await dsA2.read("lat");
+
+      // A's re-opened dir survives with its chunk intact (teardown finished
+      // before the rebuild wrote).
+      const dirA = join(cacheDir, diskDirFor("A"));
+      expect((await readdir(dirA)).length).toBeGreaterThan(0);
     } finally {
       await rm(cacheDir, { recursive: true, force: true });
     }
@@ -284,19 +325,37 @@ describe("ZarrDatasetRegistry — eviction teardown (issue #12)", () => {
     }
   });
 
-  it("writes metadata with the configured TTL when metadataCacheTtlMs is set", async () => {
-    const ttls: Array<number | undefined> = [];
-    const cache: Cache = {
-      store: new Map<string, Uint8Array>(),
-      async get(this: { store: Map<string, Uint8Array> }, key) {
-        return this.store.get(key) ?? null;
-      },
-      async set(this: { store: Map<string, Uint8Array> }, key, value, ttlMs) {
-        ttls.push(ttlMs);
-        this.store.set(key, value);
-      },
-    } as Cache & { store: Map<string, Uint8Array> };
+  it("clear() tears down handles whose build was still in flight", async () => {
+    const cacheDir = await mkdtemp(join(tmpdir(), "zarr-clear-inflight-"));
+    try {
+      const reg = new ZarrDatasetRegistry({
+        maxDatasets: 4,
+        disk: { cacheDir, maxSizeBytes: 10 * 1024 * 1024 },
+      });
 
+      // Start an open() but do NOT await it, then clear() concurrently. The
+      // build must not resolve into a dataset that survives clear() with a
+      // leaked disk directory.
+      const opening = reg.open("A", () => new MemStore(makeStoreData([1, 2, 3])));
+      await reg.clear();
+      const dsA = await opening;
+      await dsA.read("lat");
+
+      // clear() drained the in-flight build before tearing down, so after it
+      // the registry is empty. The subsequent read re-creates A's dir (a fresh
+      // open would too) — but nothing leaked from the concurrent clear itself.
+      expect(reg.size).toBe(0);
+
+      // A second clear() removes what the post-clear read wrote.
+      await reg.clear();
+      expect(await readdir(cacheDir)).toEqual([]);
+    } finally {
+      await rm(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  it("writes metadata with the configured TTL when metadataCacheTtlMs is set", async () => {
+    const cache = fakeCache();
     const reg = new ZarrDatasetRegistry({
       metadataCache: cache,
       metadataCacheTtlMs: 60_000,
@@ -304,27 +363,16 @@ describe("ZarrDatasetRegistry — eviction teardown (issue #12)", () => {
     await reg.open("s3://x/ds.zarr", () => new MemStore(makeStoreData([1, 2, 3])));
 
     // Every metadata write went through with the configured TTL.
-    expect(ttls.length).toBeGreaterThan(0);
-    expect(ttls.every((t) => t === 60_000)).toBe(true);
+    expect(cache.ttls.length).toBeGreaterThan(0);
+    expect(cache.ttls.every((t) => t === 60_000)).toBe(true);
   });
 
   it("writes metadata with no TTL by default (unchanged behavior)", async () => {
-    const ttls: Array<number | undefined> = [];
-    const cache: Cache = {
-      store: new Map<string, Uint8Array>(),
-      async get(this: { store: Map<string, Uint8Array> }, key) {
-        return this.store.get(key) ?? null;
-      },
-      async set(this: { store: Map<string, Uint8Array> }, key, value, ttlMs) {
-        ttls.push(ttlMs);
-        this.store.set(key, value);
-      },
-    } as Cache & { store: Map<string, Uint8Array> };
-
+    const cache = fakeCache();
     const reg = new ZarrDatasetRegistry({ metadataCache: cache });
     await reg.open("s3://x/ds.zarr", () => new MemStore(makeStoreData([1, 2, 3])));
 
-    expect(ttls.length).toBeGreaterThan(0);
-    expect(ttls.every((t) => t === undefined)).toBe(true);
+    expect(cache.ttls.length).toBeGreaterThan(0);
+    expect(cache.ttls.every((t) => t === undefined)).toBe(true);
   });
 });
