@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Dataset eviction now tears down its caches (issue #12).** `ZarrDatasetRegistry` evicting a handle past `maxDatasets` previously dropped only the `Map` reference, leaking the disk and shared-metadata tiers (both keyed by dataset `id`). With content-versioned ids (e.g. `s3Path@<etag>`), every re-ingestion left a permanent disk directory and a permanent set of Redis `.zmetadata`/`.zarray` keys — unbounded growth. Eviction (and `clear()`) now release the per-dataset decoded-chunk `MemoryCache` and decoded-array heap caches synchronously (freeing heap deterministically rather than at GC's discretion) and best-effort remove the evicted id's disk-cache directory, via a single `ManagedDataset.dispose()` that owns the handle's full teardown. `ZarrDatasetRegistry.clear()` now returns a `Promise<void>` that settles once disk teardown completes (previously `void`; ignoring it is still safe — heap is freed synchronously) and drains in-flight opens first, so a handle still being built when `clear()` is called can't leak a directory afterward.
+- **Eviction no longer races a re-open of the same id.** A dataset's disk directory is derived from its id (`sha256(id)`), so re-opening a just-evicted id targets the same directory. `open()` now waits for that id's in-flight teardown before rebuilding, and `CachedStore.clearCache()` marks the store closed, drains in-flight reads, then removes the directory — so a late `fetchAndCache` write can't resurrect the just-deleted dir and a re-open can't have its freshly-cached chunks deleted by the previous teardown's `rm`.
+
+### Changed
+
+- **`ZarrDatasetRegistry.clear()` now returns `Promise<void>` (was `void`).** Source-compatible if you ignore the result — heap is still freed synchronously. But if you rely on the disk directories being gone after the call (e.g. a shutdown that then unmounts the cache volume), you must now `await reg.clear()`; disk teardown completes asynchronously. Note a synchronous `process.on("exit", () => reg.clear())` handler cannot await it and will not finish disk teardown before exit — use `"beforeExit"` (which allows async work) or await `clear()` in your shutdown sequence instead.
+
+### Added
+
+- **`metadataCacheTtlMs`** on `ZarrDatasetRegistryOptions` (and the underlying `OpenOptions`), applied to shared-metadata (`metadataCache`) writes. Omit ⇒ no expiry (unchanged). Set it alongside content-versioned ids so obsolete versions' metadata keys expire from a shared cache (e.g. Redis) instead of accumulating forever — the shared cache is process-external and can't be enumerated by id on eviction, so a TTL is what bounds its growth. The TTL is (re)stamped on each cache miss (not refreshed on hits), so size it above your re-ingestion cadence; omitting it leaks content-versioned metadata even though heap and disk are reclaimed.
+- **`ZarrDatasetRegistry.whenTornDown()`** resolves once every eviction-triggered disk teardown so far has settled — a hook for graceful shutdown (unmounting the cache volume) or tests asserting on directory contents, since eviction runs teardown in the background rather than blocking `open()`.
+
 ## [0.7.2] — 2026-06-16
 
 ### Added

@@ -27,6 +27,12 @@ export interface OpenOptions {
   metadataCache?: Cache;
   /** Explicit store identity overriding the derived one (FR-008). */
   storeId?: string;
+  /**
+   * TTL in ms applied to metadata cache writes. Omit ⇒ no expiry. Use with a
+   * content-versioned `storeId` so obsolete versions' keys expire from a shared
+   * cache instead of accumulating forever.
+   */
+  metadataCacheTtlMs?: number;
   /** Per-instance observability hooks (shared-tier cache hit/miss). */
   observability?: ObservabilityHooks;
 }
@@ -53,6 +59,7 @@ function resolveMetaContext(
     cache: options.metadataCache,
     storeId,
     observability: options.observability,
+    ttlMs: options.metadataCacheTtlMs,
   };
 }
 

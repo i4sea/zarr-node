@@ -27,6 +27,14 @@ export class CachedStore implements Store {
   private readonly skipLocal: boolean;
   private readonly hooks?: ObservabilityHooks;
   private readonly inflight = new Map<string, Promise<Uint8Array | null>>();
+  /**
+   * Set once {@link clearCache} has torn down the disk directory. A closed
+   * store must never re-create it: a `fetchAndCache` that was already awaiting
+   * the backend when the teardown ran would otherwise `mkdir` the just-deleted
+   * dir back into existence, resurrecting the leak. After close, reads bypass
+   * the disk tier entirely (serve straight from the backend).
+   */
+  private closed = false;
 
   constructor(inner: Store, options: CacheOptions) {
     this.inner = inner;
@@ -50,6 +58,11 @@ export class CachedStore implements Store {
   }
 
   async get(key: string): Promise<Uint8Array | null> {
+    // Once torn down, never touch disk again — serve from the backend so a
+    // late read can't re-create the removed directory (see `closed`).
+    if (this.closed) {
+      return this.inner.get(key);
+    }
     // Don't cache metadata keys
     if (isMetadataKey(key)) {
       return this.inner.get(key);
@@ -89,7 +102,9 @@ export class CachedStore implements Store {
 
   private async fetchAndCache(key: string): Promise<Uint8Array | null> {
     const data = await this.inner.get(key);
-    if (data !== null) {
+    // A teardown may have run while we were awaiting the backend. Skip the
+    // write so `DiskCache.set`'s `mkdir` doesn't recreate the removed dir.
+    if (data !== null && !this.closed) {
       await this.cache.set(key, data);
     }
     return data;
@@ -118,7 +133,19 @@ export class CachedStore implements Store {
     yield* this.inner.list(prefix);
   }
 
+  /**
+   * Tear down the on-disk directory for this store, permanently. Marks the
+   * store closed FIRST so no new read caches into the dir, then drains
+   * in-flight reads (their `fetchAndCache` re-checks `closed` before writing),
+   * then removes the directory. After this resolves the dir stays gone: later
+   * reads (finding the store closed) serve from the backend without caching.
+   */
   async clearCache(): Promise<void> {
+    this.closed = true;
+    // Drain reads that were already awaiting the backend; each re-checks
+    // `closed` in fetchAndCache and skips its write, so none can re-create the
+    // directory after the `rm` below.
+    await Promise.allSettled([...this.inflight.values()]);
     await this.cache.clear();
   }
 }

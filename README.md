@@ -427,7 +427,10 @@ can't be trusted.
 | `openArray(store, path?, options?)` | Open a Zarr array (throws if not an array) |
 | `openGroup(store, path?, options?)` | Open a Zarr group (throws if not a group) |
 
-All three accept `OpenOptions { metadataCache?, storeId?, observability? }`.
+All three accept `OpenOptions { metadataCache?, storeId?, metadataCacheTtlMs?, observability? }`.
+`metadataCacheTtlMs` sets a TTL (ms) on metadata-cache writes — use it with a
+content-versioned `storeId` so obsolete versions' keys expire from a shared cache
+instead of accumulating forever (omit ⇒ no expiry).
 
 ### Store backends
 
