@@ -405,4 +405,58 @@ describe("ZarrDatasetRegistry — eviction teardown (issue #12)", () => {
     expect(cache.ttls.length).toBeGreaterThan(0);
     expect(cache.ttls.every((t) => t === undefined)).toBe(true);
   });
+
+  it("does not leak disk dirs under concurrent open/read/clear churn", async () => {
+    const cacheDir = await mkdtemp(join(tmpdir(), "zarr-stress-"));
+    try {
+      // Small cap + a small id pool ⇒ heavy LRU churn: the same id is evicted
+      // and re-opened repeatedly, its teardown racing the next open, all while
+      // clear() runs concurrently. This is the concurrent shape the race fixes
+      // target; the invariant checked at the end is "no directory leaked".
+      const reg = new ZarrDatasetRegistry({
+        maxDatasets: 2,
+        disk: { cacheDir, maxSizeBytes: 10 * 1024 * 1024 },
+      });
+
+      const IDS = ["A", "B", "C", "D"];
+      // A backend whose read latency varies by id, so builds resolve out of
+      // order and teardown/rebuild interleavings actually get exercised.
+      const store = (id: string): Store => {
+        const delay = (id.charCodeAt(0) % 4) + 1; // 1..4 ticks
+        const inner = new MemStore(makeStoreData([1, 2, 3]));
+        return {
+          async get(key) {
+            for (let i = 0; i < delay; i++) await Promise.resolve();
+            return inner.get(key);
+          },
+          has: (k) => inner.has(k),
+          list: (p) => inner.list(p),
+        };
+      };
+
+      const ops: Array<Promise<unknown>> = [];
+      for (let i = 0; i < 200; i++) {
+        const id = IDS[i % IDS.length];
+        // Deterministic mix: mostly open+read, an occasional clear() woven in.
+        if (i % 17 === 0) {
+          ops.push(reg.clear());
+        } else {
+          ops.push(reg.open(id, () => store(id)).then((ds) => ds.read("lat")));
+        }
+      }
+      // None of the concurrent ops may reject.
+      await Promise.all(ops);
+
+      // Quiesce: drain background teardowns, then a final clear() must leave
+      // the cache directory completely empty — proof nothing leaked.
+      await reg.whenTornDown();
+      await reg.clear();
+      await reg.whenTornDown();
+
+      expect(reg.size).toBe(0);
+      expect(await readdir(cacheDir)).toEqual([]);
+    } finally {
+      await rm(cacheDir, { recursive: true, force: true });
+    }
+  });
 });
