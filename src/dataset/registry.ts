@@ -311,7 +311,11 @@ export class ZarrDatasetRegistry {
     // in-flight `rm`. Wait for it to settle first (best-effort teardown never
     // rejects), then build against a clean directory.
     const pending = this.teardowns.get(id);
-    const promise = (pending ? pending.then(() => this.build(id, storeFactory)) : this.build(id, storeFactory))
+    const promise = (
+      pending
+        ? pending.then(() => this.build(id, storeFactory))
+        : this.build(id, storeFactory)
+    )
       .then((dataset) => {
         this.entries.set(id, dataset);
         this.evictIfOverCap();
@@ -359,8 +363,13 @@ export class ZarrDatasetRegistry {
     storeFactory: StoreFactory,
   ): Promise<ManagedDataset> {
     const backend = await storeFactory();
-    const { metadataCache, metadataCacheTtlMs, coordinateCache, observability, disk } =
-      this.options;
+    const {
+      metadataCache,
+      metadataCacheTtlMs,
+      coordinateCache,
+      observability,
+      disk,
+    } = this.options;
 
     const cachedStore: CachedStore | undefined = disk
       ? new CachedStore(backend, {
