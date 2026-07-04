@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-07-04
+
 ### Fixed
 
 - **Dataset eviction now tears down its caches (issue #12).** `ZarrDatasetRegistry` evicting a handle past `maxDatasets` previously dropped only the `Map` reference, leaking the disk and shared-metadata tiers (both keyed by dataset `id`). With content-versioned ids (e.g. `s3Path@<etag>`), every re-ingestion left a permanent disk directory and a permanent set of Redis `.zmetadata`/`.zarray` keys — unbounded growth. Eviction (and `clear()`) now release the per-dataset decoded-chunk `MemoryCache` and decoded-array heap caches synchronously (freeing heap deterministically rather than at GC's discretion) and best-effort remove the evicted id's disk-cache directory, via a single `ManagedDataset.dispose()` that owns the handle's full teardown. `ZarrDatasetRegistry.clear()` now returns a `Promise<void>` that settles once disk teardown completes (previously `void`; ignoring it is still safe — heap is freed synchronously) and drains in-flight opens first, so a handle still being built when `clear()` is called can't leak a directory afterward.
