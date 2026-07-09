@@ -271,6 +271,42 @@ def generate_v3_group(base: str) -> None:
     print("  v3_group: root -> {data, sub/inner}")
 
 
+def generate_v3_consolidated(base: str) -> None:
+    """v3 hierarchy with consolidated metadata nested in the root zarr.json."""
+    path = os.path.join(base, "v3_consolidated")
+    root = zarr.open_group(path, mode="w", zarr_format=3)
+    root.attrs["title"] = "v3 consolidated hierarchy"
+
+    grp = root.create_group("sub")
+    grp.attrs["depth"] = 1
+
+    data_a = np.arange(24, dtype="<f4").reshape(4, 6)
+    arr_a = root.create_array("data", shape=data_a.shape, dtype=data_a.dtype,
+                              chunks=(2, 3))
+    arr_a[:] = data_a
+
+    data_b = np.array([100, 200, 300], dtype="<i4")
+    arr_b = grp.create_array("inner", shape=data_b.shape, dtype=data_b.dtype,
+                             chunks=(3,))
+    arr_b[:] = data_b
+
+    zarr.consolidate_metadata(path)
+
+    expected = {
+        "root_attrs": {"title": "v3 consolidated hierarchy"},
+        "sub_attrs": {"depth": 1},
+        "data": {"shape": list(data_a.shape),
+                 "dtype": v3_dtype_name(data_a.dtype),
+                 "data": data_a.flatten().tolist()},
+        "inner": {"shape": list(data_b.shape),
+                  "dtype": v3_dtype_name(data_b.dtype),
+                  "data": data_b.tolist()},
+    }
+    with open(os.path.join(path, "expected.json"), "w") as f:
+        json.dump(expected, f)
+    print("  v3_consolidated: root zarr.json embeds consolidated_metadata")
+
+
 if __name__ == "__main__":
     base = os.path.dirname(os.path.abspath(__file__))
     print("Generating Zarr v2 test fixtures...")
@@ -292,4 +328,5 @@ if __name__ == "__main__":
     generate_v3_crc32c(base)
     generate_v3_big_endian(base)
     generate_v3_sharded(base)
+    generate_v3_consolidated(base)
     print("Done.")

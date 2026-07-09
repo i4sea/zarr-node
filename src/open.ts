@@ -7,6 +7,7 @@ import {
 } from "./group.js";
 import type { ConsolidatedMetadata } from "./metadata/consolidated.js";
 import { parseConsolidatedMetadata } from "./metadata/consolidated.js";
+import { parseV3ConsolidatedMetadata } from "./metadata/consolidated-v3.js";
 import { detectNode } from "./metadata/layout.js";
 import type { DetectedNode, MetaReader } from "./metadata/layout.js";
 import { MetadataError, StoreError } from "./errors.js";
@@ -156,9 +157,9 @@ async function openGroupFromNode(
   read: MetaReader,
   ctx?: MetadataCacheContext,
 ): Promise<ZarrGroup> {
-  // Load consolidated metadata if available (FR-001, FR-007) — the group's
-  // own attrs are then served from it instead of a store round-trip.
-  const consolidated = await loadConsolidatedMetadata(store, basePath, ctx);
+  // Load consolidated metadata if available (FR-001, FR-007, FR-016) — the
+  // group's own attrs are then served from it instead of a store round-trip.
+  const consolidated = await loadConsolidatedMetadata(store, node, basePath, ctx);
   const readMeta: MetaReader = consolidated
     ? async (key) => consolidated.get(key) ?? read(key)
     : read;
@@ -169,16 +170,24 @@ async function openGroupFromNode(
 }
 
 /**
- * Attempt to load .zmetadata from the store root.
- * Returns null if not found (transparent fallback per FR-004).
+ * Load consolidated metadata for a root group (root-only, matching the v2
+ * behavior). v2: a sibling `.zmetadata` document. v3: the nested
+ * `consolidated_metadata` block embedded in the root `zarr.json` itself —
+ * already fetched during detection, so no extra round-trip (FR-016).
+ * Returns null when absent (transparent fallback per FR-004).
  */
 async function loadConsolidatedMetadata(
   store: Store,
+  node: DetectedNode,
   basePath: string,
   ctx?: MetadataCacheContext,
 ): Promise<ConsolidatedMetadata | null> {
-  // .zmetadata is always at store root, not at sub-group paths
+  // Consolidated metadata is always at the store root, not sub-group paths
   if (basePath) return null;
+
+  if (node.format === 3) {
+    return parseV3ConsolidatedMetadata(node.raw);
+  }
 
   const raw = await readMetadataThrough(store, ".zmetadata", ctx);
   if (!raw) return null;
