@@ -210,3 +210,24 @@ harness shape is already reusable; only the generators and fixture directories a
 | Fixtures | R9 — `zarr_format=3` generators, reuse `expected.json` harness |
 
 **All NEEDS CLARIFICATION resolved. Ready for Phase 1.**
+
+---
+
+## Appendix: local perf measurement (T051, SC-006)
+
+Measured 2026-07-09 on the implementation, local FS, Node 24. Fixture
+`v3_sharded_large` (from `tests/fixtures/generate_large.py`): 5000×5000
+float32 (~100 MB), shards 1000×1000 (4 MB each), inner chunks 250×250
+(250 KB each), uncompressed inner chain so transferred bytes are exact.
+
+Sub-region read `[[750, 1250], [750, 1250]]` (500×500 ≈ 1 MB of data,
+crossing 4 shard boundaries, touching 4 inner chunks):
+
+| Path | Bytes transferred | Requests | Wall time |
+|------|-------------------|----------|-----------|
+| Byte-range (`getRange`, index + coalesced inner-chunk spans) | **1.00 MB** | 9 (incl. metadata + 4 index reads) | 14 ms |
+| Whole-shard baseline (range-less store) | 16.00 MB | 5 | 19 ms |
+
+**Transfer reduction: 16×** (= 4 shards × 4 MB vs exactly the 4 touched
+inner chunks + ~4 KB of shard indexes). Zero full-shard `get` calls on the
+ranged path (SC-004). Script: `.bench/perf-sharded.ts` (gitignored).

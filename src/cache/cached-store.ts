@@ -1,4 +1,4 @@
-import type { Store } from "../store/store.js";
+import type { Store, StoreHead } from "../store/store.js";
 import { deriveStoreId } from "../store/identity.js";
 import type { ObservabilityHooks } from "../observability.js";
 import { safeInvoke } from "../observability.js";
@@ -127,6 +127,20 @@ export class CachedStore implements Store {
     const data = await this.get(key);
     if (data === null) return null;
     return data.slice(offset, offset + length);
+  }
+
+  async head(key: string): Promise<StoreHead | null> {
+    // Metadata probe — always answered by the backend (feature 006: lets
+    // sharded reads range-read end-located shard indexes through this tier).
+    if (this.inner.head) {
+      return this.inner.head(key);
+    }
+    // Contract: null strictly means "key absent". Without a backend head(),
+    // synthesize existence from has() with unknown size/etag — callers that
+    // need the size (e.g. the sharding reader) fall back gracefully.
+    return (await this.inner.has(key))
+      ? { etag: null, lastModified: null, size: null }
+      : null;
   }
 
   async *list(prefix: string): AsyncIterable<string> {

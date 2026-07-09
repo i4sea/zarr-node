@@ -176,13 +176,13 @@ without per-node metadata fetches and read correct values.
 
 ### Tests (write first, must fail)
 
-- [ ] T046 [P] [US5] Unit test for the v3 consolidated reader in `tests/unit/consolidated-v3.test.ts`: parse nested `consolidated_metadata`; `get`/`has`/`listChildren` present the same lookup surface as the v2 `ConsolidatedMetadata` (FR-016).
-- [ ] T047 [P] [US5] Add a `v3_consolidated` hierarchy fixture via `generate.py` and integration test `tests/integration/v3-consolidated.test.ts` using a recording store: children resolve with **zero** per-node metadata fetches and values match a non-consolidated read (US5 acceptance 1–2, SC-005).
+- [X] T046 [P] [US5] Unit test for the v3 consolidated reader in `tests/unit/consolidated-v3.test.ts`: parse nested `consolidated_metadata`; `get`/`has`/`listChildren` present the same lookup surface as the v2 `ConsolidatedMetadata` (FR-016).
+- [X] T047 [P] [US5] Add a `v3_consolidated` hierarchy fixture via `generate.py` and integration test `tests/integration/v3-consolidated.test.ts` using a recording store: children resolve with **zero** per-node metadata fetches and values match a non-consolidated read (US5 acceptance 1–2, SC-005).
 
 ### Implementation
 
-- [ ] T048 [US5] Implement `src/metadata/consolidated-v3.ts`: read the nested v3 `consolidated_metadata` from the root `zarr.json`, exposing the v2 `ConsolidatedMetadata` lookup interface (`get`/`has`/`listChildren`).
-- [ ] T049 [US5] Wire root-only v3 consolidated loading into `open.ts`/`ZarrGroup` (parallel to the existing v2 `.zmetadata` path) so `ZarrGroup` consults it before hitting the store (FR-016). (Depends on T048, T013.)
+- [X] T048 [US5] Implement `src/metadata/consolidated-v3.ts`: read the nested v3 `consolidated_metadata` from the root `zarr.json`, exposing the v2 `ConsolidatedMetadata` lookup interface (`get`/`has`/`listChildren`).
+- [X] T049 [US5] Wire root-only v3 consolidated loading into `open.ts`/`ZarrGroup` (parallel to the existing v2 `.zmetadata` path) so `ZarrGroup` consults it before hitting the store (FR-016). (Depends on T048, T013.)
 
 **Checkpoint**: v3 consolidated metadata delivers the same per-node-fetch avoidance as v2.
 
