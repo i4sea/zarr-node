@@ -192,12 +192,12 @@ without per-node metadata fetches and read correct values.
 
 **Purpose**: Performance validation, docs, and final gates across all stories.
 
-- [ ] T050 [P] Add large v3 + sharded fixtures (`v3_large_100mb`, `v3_sharded_large`) via `generate.py` alongside `large_100mb`/`large_1gb`.
-- [ ] T051 Local performance measurement (no invented CI target, SC-006): record bytes transferred for a sub-region read of `v3_sharded_large` (byte-range path) vs a whole-shard baseline; note results in `specs/006-zarr-v3-reader/research.md` or a perf note.
-- [ ] T052 [P] Confirm the v3 read path reuses the existing decode pool, byte-budgeted caches, and concurrency-limited fan-out with no separate implementation (FR-018) — a code-audit checklist task.
-- [ ] T053 [P] Update `README`/docs and add a changeset entry for the additive v3 read support (constitution: changelog + semver); reflect the "no API change" nature.
-- [ ] T054 Final gate: `npm test && npm run lint` fully green (all v2 + v3 unit/integration), and re-verify public API signatures unchanged.
-- [ ] T055 Run the `quickstart.md` scenarios end-to-end as a smoke check.
+- [X] T050 [P] Add large v3 + sharded fixtures (`v3_large_100mb`, `v3_sharded_large`) via `generate.py` alongside `large_100mb`/`large_1gb`.
+- [X] T051 Local performance measurement (no invented CI target, SC-006): record bytes transferred for a sub-region read of `v3_sharded_large` (byte-range path) vs a whole-shard baseline; note results in `specs/006-zarr-v3-reader/research.md` or a perf note.
+- [X] T052 [P] Confirm the v3 read path reuses the existing decode pool, byte-budgeted caches, and concurrency-limited fan-out with no separate implementation (FR-018) — a code-audit checklist task.
+- [X] T053 [P] Update `README`/docs and add a changeset entry for the additive v3 read support (constitution: changelog + semver); reflect the "no API change" nature.
+- [X] T054 Final gate: `npm test && npm run lint` fully green (all v2 + v3 unit/integration), and re-verify public API signatures unchanged.
+- [X] T055 Run the `quickstart.md` scenarios end-to-end as a smoke check.
 
 ---
 
