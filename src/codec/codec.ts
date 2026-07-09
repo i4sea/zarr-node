@@ -52,6 +52,20 @@ codecRegistry.register("gzip", () => new GzipCodec("gzip"));
 codecRegistry.register("bytes", (config) => new BytesCodec(config));
 codecRegistry.register("transpose", (config) => new TransposeCodec(config));
 codecRegistry.register("crc32c", () => new Crc32cCodec());
+// sharding_indexed is registered for discovery/parse (plugin surface), but it
+// executes as the store-aware sharding reader (src/codec/sharding.ts), never
+// through pipeline.decode() — see contracts/sharding.md "Where sharding lives".
+codecRegistry.register("sharding_indexed", (config) => ({
+  id: "sharding_indexed",
+  async decode(): Promise<Uint8Array> {
+    throw new CodecError(
+      "sharding_indexed cannot be decoded as a plain codec; sharded chunk " +
+        "reads are routed to the sharding reader by the read path",
+    );
+  },
+  // Referenced so the config isn't dropped by bundlers/linters.
+  config,
+}));
 
 // Lazy-load Blosc. `numcodecs` is ESM-only — its package.json `exports`
 // map has only an `"import"` condition. Two consequences for the CJS

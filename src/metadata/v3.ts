@@ -7,11 +7,13 @@ import { codecRegistry } from "../codec/codec.js";
 import { CodecPipeline, codecKind } from "../codec/pipeline.js";
 import type { PipelineStage } from "../codec/pipeline.js";
 import { BytesCodec } from "../codec/bytes.js";
+import { shardIndexSize } from "../codec/sharding.js";
 import type {
   ResolvedArrayMeta,
   ResolvedGroupMeta,
   ResolvedDtype,
   ChunkKeyStrategy,
+  ShardingInfo,
   Zattrs,
   CompressorConfig,
 } from "./types.js";
@@ -242,6 +244,71 @@ export function resolveByteOrderFromCodecs(
 }
 
 /**
+ * Parse a `sharding_indexed` configuration into the resolved sharding info
+ * (FR-012). The outer chunk (shard) shape must be an exact multiple of the
+ * inner chunk shape per dimension.
+ */
+async function parseShardingConfig(
+  entry: Codec3Config,
+  shardShape: number[],
+): Promise<ShardingInfo> {
+  const config = entry.configuration ?? {};
+  const innerChunkShape = parseShape(
+    config.chunk_shape,
+    "sharding_indexed chunk_shape",
+  );
+  if (innerChunkShape.length !== shardShape.length) {
+    throw new MetadataError(
+      `sharding_indexed chunk_shape rank ${innerChunkShape.length} does not ` +
+        `match the chunk grid rank ${shardShape.length}`,
+    );
+  }
+  const chunksPerShardDim = shardShape.map((s, d) => {
+    if (innerChunkShape[d] <= 0 || s % innerChunkShape[d] !== 0) {
+      throw new MetadataError(
+        `sharding_indexed chunk_shape[${d}] = ${innerChunkShape[d]} does not ` +
+          `evenly divide the shard shape ${s}`,
+      );
+    }
+    return s / innerChunkShape[d];
+  });
+  const chunksPerShard = chunksPerShardDim.reduce((a, b) => a * b, 1);
+
+  const innerCodecs = parseCodecChain(config.codecs, "");
+  const indexCodecs = parseCodecChain(config.index_codecs, "");
+  if (indexCodecs.length === 0) {
+    throw new MetadataError(
+      "sharding_indexed requires index_codecs (the shard index encoding)",
+    );
+  }
+  const indexLocation = config.index_location ?? "end";
+  if (indexLocation !== "start" && indexLocation !== "end") {
+    throw new MetadataError(
+      `Invalid sharding_indexed index_location: ${JSON.stringify(indexLocation)}`,
+    );
+  }
+
+  // The index is uint64 pairs — resolve its byte order from ITS bytes codec.
+  const indexByteOrder = resolveByteOrderFromCodecs(indexCodecs, {
+    ctor: BigUint64Array,
+    byteSize: 8,
+    byteOrder: "none",
+    widenHalfToFloat: false,
+  });
+
+  return {
+    innerChunkShape,
+    chunksPerShardDim,
+    chunksPerShard,
+    innerPipeline: await buildV3Pipeline(innerCodecs),
+    indexPipeline: await buildV3Pipeline(indexCodecs),
+    indexByteOrder,
+    indexLocation,
+    indexSizeBytes: shardIndexSize(chunksPerShard, indexCodecs),
+  };
+}
+
+/**
  * Parse a v3 array `zarr.json` document into the neutral array description
  * (FR-003, FR-004, FR-011, FR-021).
  */
@@ -279,7 +346,27 @@ export async function parseV3ArrayMeta(
 
   const codecs = parseCodecChain(doc.codecs, basePath);
   dtype.byteOrder = resolveByteOrderFromCodecs(codecs, dtype);
-  const codecPipeline = await buildV3Pipeline(codecs);
+
+  // sharding_indexed occupies the array→bytes slot but executes as a
+  // store-aware reader, not through pipeline.decode() (contracts/sharding.md).
+  const shardingEntry = codecs.find((c) => c.name === "sharding_indexed");
+  let sharding: ShardingInfo | null = null;
+  let codecPipeline;
+  if (shardingEntry) {
+    if (codecs.length !== 1) {
+      throw new MetadataError(
+        `Unsupported codec chain at path "${basePath || "/"}": ` +
+          `sharding_indexed must be the only outer codec ` +
+          `(found: ${codecs.map((c) => c.name).join(", ")})`,
+      );
+    }
+    sharding = await parseShardingConfig(shardingEntry, chunkShape);
+    // For sharded arrays the resolved pipeline is the INNER chunk chain —
+    // the sharding reader decodes each inner chunk through it.
+    codecPipeline = sharding.innerPipeline;
+  } else {
+    codecPipeline = await buildV3Pipeline(codecs);
+  }
 
   return {
     zarrFormat: 3,
@@ -294,6 +381,7 @@ export async function parseV3ArrayMeta(
     order: "C",
     chunkKey: parseChunkKeyEncoding(doc.chunk_key_encoding, basePath),
     attrs: (doc.attributes ?? {}) as Zattrs,
+    sharding,
   };
 }
 

@@ -81,6 +81,32 @@ export interface ResolvedArrayMeta {
   order: "C" | "F";
   chunkKey: ChunkKeyStrategy;
   attrs: Zattrs;
+  /**
+   * Present when the array→bytes slot is `sharding_indexed` (v3): the read
+   * path then routes chunk reads to the store-aware sharding reader instead
+   * of `loadChunks`. For sharded arrays `chunkShape` is the SHARD shape and
+   * `codecPipeline` is the INNER chunk pipeline.
+   */
+  sharding?: ShardingInfo | null;
+}
+
+/** Resolved `sharding_indexed` configuration (see contracts/sharding.md). */
+export interface ShardingInfo {
+  /** Inner-chunk shape; divides the shard (outer chunk) shape per dimension. */
+  innerChunkShape: number[];
+  /** Inner chunks per shard, per dimension (chunkShape / innerChunkShape). */
+  chunksPerShardDim: number[];
+  /** Total inner chunks per shard (product of chunksPerShardDim). */
+  chunksPerShard: number;
+  /** Decode chain for each inner chunk. */
+  innerPipeline: CodecPipeline;
+  /** Decode chain for the shard index (typically bytes LE + crc32c). */
+  indexPipeline: CodecPipeline;
+  /** Byte order of the decoded index's uint64 pairs. */
+  indexByteOrder: ByteOrder;
+  indexLocation: "start" | "end";
+  /** Stored index size: N × 16 bytes + index-codec checksum overhead. */
+  indexSizeBytes: number;
 }
 
 /** Version-neutral description of a group node. */

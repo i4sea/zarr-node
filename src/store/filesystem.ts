@@ -1,6 +1,6 @@
-import { readFile, access, readdir, open as fsOpen } from "node:fs/promises";
+import { readFile, access, readdir, open as fsOpen, stat } from "node:fs/promises";
 import { join } from "node:path";
-import type { Store, FileSystemStoreOptions } from "./store.js";
+import type { Store, StoreHead, FileSystemStoreOptions } from "./store.js";
 
 export class FileSystemStore implements Store {
   private readonly root: string;
@@ -43,6 +43,16 @@ export class FileSystemStore implements Store {
       } finally {
         await fh.close();
       }
+    } catch (err) {
+      if (isNotFound(err)) return null;
+      throw err;
+    }
+  }
+
+  async head(key: string): Promise<StoreHead | null> {
+    try {
+      const s = await stat(join(this.root, key));
+      return { etag: null, lastModified: s.mtime, size: s.size };
     } catch (err) {
       if (isNotFound(err)) return null;
       throw err;

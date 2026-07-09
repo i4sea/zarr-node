@@ -227,6 +227,17 @@ def generate_v3_big_endian(base: str) -> None:
     print("  v3_big_endian: bytes(endian=big), no compressor")
 
 
+def generate_v3_sharded(base: str) -> None:
+    """sharding_indexed: shards of 20x20 packing 2x2 inner chunks of 10x10.
+    Inner chain: bytes -> zstd -> crc32c (checksums verified on decode)."""
+    from zarr.codecs import ZstdCodec, Crc32cCodec
+    path = os.path.join(base, "v3_sharded")
+    data = np.arange(1600, dtype="<f4").reshape(40, 40)
+    write_v3_array(path, data, chunks=(10, 10), shards=(20, 20),
+                   compressors=[ZstdCodec(level=3), Crc32cCodec()])
+    print("  v3_sharded: shape=(40,40), shards=(20,20), inner chunks=(10,10)")
+
+
 def generate_v3_group(base: str) -> None:
     path = os.path.join(base, "v3_group")
     root = zarr.open_group(path, mode="w", zarr_format=3)
@@ -280,4 +291,5 @@ if __name__ == "__main__":
     generate_v3_transpose_zstd(base)
     generate_v3_crc32c(base)
     generate_v3_big_endian(base)
+    generate_v3_sharded(base)
     print("Done.")
