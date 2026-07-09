@@ -1,4 +1,5 @@
 import { MetadataError } from "./errors.js";
+import type { ResolvedDtype } from "./metadata/types.js";
 
 export type TypedArray =
   | Int8Array
@@ -48,6 +49,54 @@ const DTYPE_MAP: Record<
   "<u8": { ctor: BigUint64Array, byteSize: 8 },
   ">u8": { ctor: BigUint64Array, byteSize: 8 },
 };
+
+/**
+ * v3 named `data_type` map (FR-004), parallel to the numpy-typestr DTYPE_MAP.
+ * v3 names carry no endianness — byte order comes from the `bytes` codec's
+ * `endian` field and is resolved by the v3 metadata parser (FR-005).
+ *
+ * - `float16` widens into a `Float32Array` on decode (no guaranteed native
+ *   Float16Array across Node LTS); its STORED byteSize stays 2.
+ * - `int64`/`uint64` surface as BigInt typed arrays, like their v2 typestrs.
+ * - `bool` surfaces as `Uint8Array` (0/1).
+ */
+const V3_DTYPE_MAP: Record<
+  string,
+  { ctor: TypedArrayConstructor; byteSize: number; widenHalfToFloat?: boolean }
+> = {
+  bool: { ctor: Uint8Array, byteSize: 1 },
+  int8: { ctor: Int8Array, byteSize: 1 },
+  int16: { ctor: Int16Array, byteSize: 2 },
+  int32: { ctor: Int32Array, byteSize: 4 },
+  int64: { ctor: BigInt64Array, byteSize: 8 },
+  uint8: { ctor: Uint8Array, byteSize: 1 },
+  uint16: { ctor: Uint16Array, byteSize: 2 },
+  uint32: { ctor: Uint32Array, byteSize: 4 },
+  uint64: { ctor: BigUint64Array, byteSize: 8 },
+  float16: { ctor: Float32Array, byteSize: 2, widenHalfToFloat: true },
+  float32: { ctor: Float32Array, byteSize: 4 },
+  float64: { ctor: Float64Array, byteSize: 8 },
+};
+
+/**
+ * Resolve a v3 `data_type` name. `byteOrder` starts as "none"; the v3 parser
+ * overwrites it from the `bytes` codec's `endian` for multi-byte types.
+ */
+export function resolveV3Dtype(name: string): ResolvedDtype {
+  const entry = V3_DTYPE_MAP[name];
+  if (!entry) {
+    throw new MetadataError(
+      `Unsupported v3 data_type: "${name}". Supported: ` +
+        Object.keys(V3_DTYPE_MAP).join(", "),
+    );
+  }
+  return {
+    ctor: entry.ctor,
+    byteSize: entry.byteSize,
+    byteOrder: "none",
+    widenHalfToFloat: entry.widenHalfToFloat ?? false,
+  };
+}
 
 function lookupDtype(dtype: string) {
   const entry = DTYPE_MAP[dtype];

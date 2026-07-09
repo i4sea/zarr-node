@@ -176,6 +176,39 @@ def generate_v3_uncompressed_2d(base: str) -> None:
     print(f"  v3_uncompressed_2d: shape={data.shape}, dtype={v3_dtype_name(data.dtype)}")
 
 
+def generate_v3_group(base: str) -> None:
+    path = os.path.join(base, "v3_group")
+    root = zarr.open_group(path, mode="w", zarr_format=3)
+    root.attrs["description"] = "v3 test group"
+
+    grp = root.create_group("sub")
+    grp.attrs["depth"] = 1
+
+    data_a = np.arange(12, dtype="<f4").reshape(3, 4)
+    arr_a = root.create_array("data", shape=data_a.shape, dtype=data_a.dtype,
+                              chunks=(3, 4))
+    arr_a[:] = data_a
+
+    data_b = np.array([10, 20, 30, 40], dtype="<i4")
+    arr_b = grp.create_array("inner", shape=data_b.shape, dtype=data_b.dtype,
+                             chunks=(4,))
+    arr_b[:] = data_b
+
+    expected = {
+        "root_attrs": {"description": "v3 test group"},
+        "sub_attrs": {"depth": 1},
+        "data": {"shape": list(data_a.shape),
+                 "dtype": v3_dtype_name(data_a.dtype),
+                 "data": data_a.flatten().tolist()},
+        "inner": {"shape": list(data_b.shape),
+                  "dtype": v3_dtype_name(data_b.dtype),
+                  "data": data_b.tolist()},
+    }
+    with open(os.path.join(path, "expected.json"), "w") as f:
+        json.dump(expected, f)
+    print("  v3_group: root -> {data, sub/inner}")
+
+
 if __name__ == "__main__":
     base = os.path.dirname(os.path.abspath(__file__))
     print("Generating Zarr v2 test fixtures...")
@@ -190,4 +223,5 @@ if __name__ == "__main__":
     generate_v3_simple_1d(base)
     generate_v3_chunked_2d(base)
     generate_v3_uncompressed_2d(base)
+    generate_v3_group(base)
     print("Done.")

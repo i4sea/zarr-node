@@ -42,21 +42,21 @@ depends on this.** This phase MUST leave the existing v2 fixtures and tests pass
 
 ### Tests (write first, must fail)
 
-- [ ] T005 [P] Unit test for `detectNode` in `tests/unit/layout.test.ts`: v2-array (`.zarray`), v2-group (`.zgroup`), node-not-found → error. (v3 cases added in US2.)
-- [ ] T006 [P] Unit test for the version-neutral metadata adapter in `tests/unit/metadata-neutral.test.ts`: a parsed v2 `.zarray` maps to `ResolvedArrayMeta` with correct `shape`/`chunkShape`/`dtype`/`order`/`chunkKey`.
-- [ ] T007 [P] Unit test for `CodecPipeline` in `tests/unit/pipeline.test.ts`: empty chain = pass-through; reverse-order application; rejects zero or >1 array→bytes codecs (`CodecError`/`MetadataError`).
+- [X] T005 [P] Unit test for `detectNode` in `tests/unit/layout.test.ts`: v2-array (`.zarray`), v2-group (`.zgroup`), node-not-found → error. (v3 cases added in US2.)
+- [X] T006 [P] Unit test for the version-neutral metadata adapter in `tests/unit/metadata-neutral.test.ts`: a parsed v2 `.zarray` maps to `ResolvedArrayMeta` with correct `shape`/`chunkShape`/`dtype`/`order`/`chunkKey`.
+- [X] T007 [P] Unit test for `CodecPipeline` in `tests/unit/pipeline.test.ts`: empty chain = pass-through; reverse-order application; rejects zero or >1 array→bytes codecs (`CodecError`/`MetadataError`).
 
 ### Implementation
 
-- [ ] T008 Add version-neutral types `ResolvedArrayMeta`, `ResolvedGroupMeta`, `ResolvedDtype`, `ChunkKeyStrategy` to `src/metadata/types.ts` (per data-model.md), without removing the existing `ZarrayMeta`/`ZgroupMeta`.
-- [ ] T009 Add `CodecPipeline` type and constructor/validator in `src/codec/pipeline.ts`: classify codecs into array→array / (exactly one) array→bytes / bytes→bytes, `decode(data, ctx)` applying the chain in reverse (FR-006, FR-007). Reuse `codecRegistry` to build individual codecs.
-- [ ] T010 Implement the `layout` abstraction in `src/metadata/layout.ts`: `detectNode(store, path)` probing `zarr.json` then `.zarray`/`.zgroup` (v2 branch only for now), plus metadata-key construction for v2 keys. Precedence rule documented (v3-first) but v3 parse deferred to US1/US2.
-- [ ] T011 Add a v2→neutral adapter in `src/metadata/v2.ts` (or a small `toResolved` in `layout.ts`) that converts `ZarrayMeta`/`ZgroupMeta` into `ResolvedArrayMeta`/`ResolvedGroupMeta`, including a v2 `ChunkKeyStrategy` (`kind:"v2"`, `separator` from `dimension_separator`, `basePath`).
-- [ ] T012 Refactor `ZarrArray` (`src/array.ts`) to consume `ResolvedArrayMeta` + a `CodecPipeline` instead of `ZarrayMeta` + single `Codec`. Move chunk-key construction (currently inlined in `getFull`/`getSlice`, `array.ts:271`/`:385`) to use `ChunkKeyStrategy` (via `indexing.ts`). Keep all public fields/signatures identical (FR-002).
-- [ ] T013 Refactor `ZarrGroup` (`src/group.ts`) child detection/keys to go through `layout` (`detectNode` + key construction) instead of hard-coded `.zarray`/`.zgroup`/`.zattrs`, preserving public signatures.
-- [ ] T014 Generalize `LoadChunksContext` in `src/chunk/loader.ts` to carry a `CodecPipeline` instead of a single `Codec | null`; route `decodeRaw` through `pipeline.decode`. Keep the decode-pool offload for the heavy bytes→bytes stage (`shouldOffload`) working for v2 blosc.
-- [ ] T015 Wire `open.ts` to build a v2 `CodecPipeline` from `meta.compressor` **plus** `meta.filters` (this applies the previously-parsed-but-unused v2 filters — FR-009) and pass neutral meta + pipeline into `ZarrArray`.
-- [ ] T016 Run `npm test && npm run lint`: all **existing v2 fixtures and tests pass unchanged** (FR-020 regression gate — safe because every existing v2 `.zarray` is `filters: null`). Then cover the FR-009 behavior change: add a `v2_filtered` fixture via `generate.py` (a v2 array declaring a non-null `filters` entry) with its `expected.json`, plus a `tests/unit/pipeline.test.ts` case, proving the filter is now applied on decode.
+- [X] T008 Add version-neutral types `ResolvedArrayMeta`, `ResolvedGroupMeta`, `ResolvedDtype`, `ChunkKeyStrategy` to `src/metadata/types.ts` (per data-model.md), without removing the existing `ZarrayMeta`/`ZgroupMeta`.
+- [X] T009 Add `CodecPipeline` type and constructor/validator in `src/codec/pipeline.ts`: classify codecs into array→array / (exactly one) array→bytes / bytes→bytes, `decode(data, ctx)` applying the chain in reverse (FR-006, FR-007). Reuse `codecRegistry` to build individual codecs.
+- [X] T010 Implement the `layout` abstraction in `src/metadata/layout.ts`: `detectNode(store, path)` probing `zarr.json` then `.zarray`/`.zgroup` (v2 branch only for now), plus metadata-key construction for v2 keys. Precedence rule documented (v3-first) but v3 parse deferred to US1/US2.
+- [X] T011 Add a v2→neutral adapter in `src/metadata/v2.ts` (or a small `toResolved` in `layout.ts`) that converts `ZarrayMeta`/`ZgroupMeta` into `ResolvedArrayMeta`/`ResolvedGroupMeta`, including a v2 `ChunkKeyStrategy` (`kind:"v2"`, `separator` from `dimension_separator`, `basePath`).
+- [X] T012 Refactor `ZarrArray` (`src/array.ts`) to consume `ResolvedArrayMeta` + a `CodecPipeline` instead of `ZarrayMeta` + single `Codec`. Move chunk-key construction (currently inlined in `getFull`/`getSlice`, `array.ts:271`/`:385`) to use `ChunkKeyStrategy` (via `indexing.ts`). Keep all public fields/signatures identical (FR-002).
+- [X] T013 Refactor `ZarrGroup` (`src/group.ts`) child detection/keys to go through `layout` (`detectNode` + key construction) instead of hard-coded `.zarray`/`.zgroup`/`.zattrs`, preserving public signatures.
+- [X] T014 Generalize `LoadChunksContext` in `src/chunk/loader.ts` to carry a `CodecPipeline` instead of a single `Codec | null`; route `decodeRaw` through `pipeline.decode`. Keep the decode-pool offload for the heavy bytes→bytes stage (`shouldOffload`) working for v2 blosc.
+- [X] T015 Wire `open.ts` to build a v2 `CodecPipeline` from `meta.compressor` **plus** `meta.filters` (this applies the previously-parsed-but-unused v2 filters — FR-009) and pass neutral meta + pipeline into `ZarrArray`.
+- [X] T016 Run `npm test && npm run lint`: all **existing v2 fixtures and tests pass unchanged** (FR-020 regression gate — safe because every existing v2 `.zarray` is `filters: null`). Then cover the FR-009 behavior change: add a `v2_filtered` fixture via `generate.py` (a v2 array declaring a non-null `filters` entry) with its `expected.json`, plus a `tests/unit/pipeline.test.ts` case, proving the filter is now applied on decode.
 
 **Checkpoint**: v2 reads through the neutral seam with zero behavior change; the pipeline and
 layout abstractions exist and are unit-tested. User stories can now begin.

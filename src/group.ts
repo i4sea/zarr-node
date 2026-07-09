@@ -12,6 +12,7 @@ import {
   toResolvedArrayMeta,
   toResolvedGroupMeta,
 } from "./metadata/v2.js";
+import { parseV3ArrayMeta, parseV3GroupMeta } from "./metadata/v3.js";
 import {
   detectNode,
   metadataKey,
@@ -43,10 +44,8 @@ export async function materializeArrayNode(
   read: MetaReader,
 ): Promise<ZarrArray> {
   if (node.format === 3) {
-    // Implemented by the v3 parser (feature 006, US1).
-    throw new MetadataError(
-      `Zarr v3 array at path "${basePath || "/"}" is not supported yet`,
-    );
+    // v3: everything (attrs, codecs, keys) lives in the single zarr.json.
+    return new ZarrArray(store, await parseV3ArrayMeta(node.raw, basePath));
   }
   const meta = parseZarrayMeta(new TextDecoder().decode(node.raw));
   const attrs = await loadV2Attrs(read, basePath);
@@ -68,10 +67,7 @@ export async function materializeGroupMeta(
   read: MetaReader,
 ): Promise<ResolvedGroupMeta> {
   if (node.format === 3) {
-    // Implemented by the v3 parser (feature 006, US1).
-    throw new MetadataError(
-      `Zarr v3 group at path "${basePath || "/"}" is not supported yet`,
-    );
+    return parseV3GroupMeta(node.raw);
   }
   const meta = parseZgroupMeta(new TextDecoder().decode(node.raw));
   const attrs = await loadV2Attrs(read, basePath);

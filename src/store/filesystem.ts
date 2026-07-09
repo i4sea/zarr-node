@@ -64,9 +64,9 @@ export class FileSystemStore implements Store {
 }
 
 function isNotFound(err: unknown): boolean {
-  return (
-    err instanceof Error &&
-    "code" in err &&
-    (err as NodeJS.ErrnoException).code === "ENOENT"
-  );
+  if (!(err instanceof Error) || !("code" in err)) return false;
+  const code = (err as NodeJS.ErrnoException).code;
+  // ENOTDIR: a path component is a file (e.g. probing "file.json/zarr.json"
+  // during node detection) — the key is just as absent as with ENOENT.
+  return code === "ENOENT" || code === "ENOTDIR";
 }
