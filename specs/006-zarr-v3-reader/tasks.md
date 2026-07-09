@@ -73,19 +73,19 @@ and sub-region, assert element-wise equality with `expected.json`.
 
 ### Tests (write first, must fail)
 
-- [ ] T017 [P] [US1] Unit test for the v3 data-type map in `tests/unit/dtype-v3.test.ts`: every supported name (`bool`, `int8/16/32/64`, `uint8/16/32/64`, `float16/32/64`) → correct ctor/byteSize; `float16`→`Float32Array` widening; `int64`/`uint64`→BigInt; unknown name → `MetadataError` (FR-004).
-- [ ] T018 [P] [US1] Unit test for v3 chunk-key encoding in `tests/unit/chunk-key-v3.test.ts`: v3-default (`c` prefix, `/` separator, `c/0/1`) and `v2` encoding; with `basePath` (FR-010).
-- [ ] T019 [P] [US1] Unit test for v3 metadata parse in `tests/unit/v3-metadata.test.ts`: `zarr.json` array vs group via `node_type`; regular `chunk_grid`; fill values incl. `NaN`/`Infinity`/`-Infinity` and byte-form (FR-003, FR-011).
-- [ ] T020 [P] [US1] Integration test in `tests/integration/v3-array.test.ts`: open `v3_chunked_2d` via `openArray`, compare `get()` (full + sub-region) to `expected.json`; open a v3 group, read a child array (US1 acceptance 1–4).
+- [X] T017 [P] [US1] Unit test for the v3 data-type map in `tests/unit/dtype-v3.test.ts`: every supported name (`bool`, `int8/16/32/64`, `uint8/16/32/64`, `float16/32/64`) → correct ctor/byteSize; `float16`→`Float32Array` widening; `int64`/`uint64`→BigInt; unknown name → `MetadataError` (FR-004).
+- [X] T018 [P] [US1] Unit test for v3 chunk-key encoding in `tests/unit/chunk-key-v3.test.ts`: v3-default (`c` prefix, `/` separator, `c/0/1`) and `v2` encoding; with `basePath` (FR-010).
+- [X] T019 [P] [US1] Unit test for v3 metadata parse in `tests/unit/v3-metadata.test.ts`: `zarr.json` array vs group via `node_type`; regular `chunk_grid`; fill values incl. `NaN`/`Infinity`/`-Infinity` and byte-form (FR-003, FR-011).
+- [X] T020 [P] [US1] Integration test in `tests/integration/v3-array.test.ts`: open `v3_chunked_2d` via `openArray`, compare `get()` (full + sub-region) to `expected.json`; open a v3 group, read a child array (US1 acceptance 1–4).
 
 ### Implementation
 
-- [ ] T021 [P] [US1] Add the v3 `data_type` → `{ctor, byteSize, widenHalfToFloat}` map in `src/dtype.ts` (parallel to `DTYPE_MAP`); byte order comes from `ResolvedDtype.byteOrder` (set later by the `bytes` codec), not a typestr prefix (FR-004, FR-005).
-- [ ] T022 [P] [US1] Implement `float16`→`float32` decode (half-to-float conversion) used when `widenHalfToFloat` is set; unit-covered by T017.
-- [ ] T023 [US1] Extend `chunkKey` in `src/chunk/indexing.ts` to honor `ChunkKeyStrategy` (`v3-default` with `c` prefix + configurable separator; `v2` encoding), folding in `basePath` (FR-010). (Depends on T012's use of `ChunkKeyStrategy`.)
-- [ ] T024 [US1] Implement the v3 parser in `src/metadata/v3.ts`: parse `zarr.json`, branch on `node_type`, resolve `data_type`→`ResolvedDtype`, `chunk_grid`→`chunkShape`, `chunk_key_encoding`→`ChunkKeyStrategy`, `fill_value` (incl. special floats/byte-form), `attributes`→`attrs`, and `codecs`→`CodecPipeline` (bytes codec sets byteOrder). Reject unknown `zarr_format`/`data_type` with clear errors (FR-003, FR-004, FR-011, FR-021).
-- [ ] T025 [US1] Extend `layout.detectNode` (`src/metadata/layout.ts`) to fully handle the v3 branch: parse `zarr.json`, return `{format:3, nodeType}`, and produce neutral meta via `src/metadata/v3.ts`. Apply the documented v3-first precedence when both markers exist.
-- [ ] T026 [US1] Wire `open.ts` (`openArray`/`openGroup`/`open`) to use `layout.detectNode` and, for v3, construct `ZarrArray`/`ZarrGroup` from the v3 neutral meta + pipeline — no signature change (FR-001, FR-002).
+- [X] T021 [P] [US1] Add the v3 `data_type` → `{ctor, byteSize, widenHalfToFloat}` map in `src/dtype.ts` (parallel to `DTYPE_MAP`); byte order comes from `ResolvedDtype.byteOrder` (set later by the `bytes` codec), not a typestr prefix (FR-004, FR-005).
+- [X] T022 [P] [US1] Implement `float16`→`float32` decode (half-to-float conversion) used when `widenHalfToFloat` is set; unit-covered by T017.
+- [X] T023 [US1] Extend `chunkKey` in `src/chunk/indexing.ts` to honor `ChunkKeyStrategy` (`v3-default` with `c` prefix + configurable separator; `v2` encoding), folding in `basePath` (FR-010). (Depends on T012's use of `ChunkKeyStrategy`.)
+- [X] T024 [US1] Implement the v3 parser in `src/metadata/v3.ts`: parse `zarr.json`, branch on `node_type`, resolve `data_type`→`ResolvedDtype`, `chunk_grid`→`chunkShape`, `chunk_key_encoding`→`ChunkKeyStrategy`, `fill_value` (incl. special floats/byte-form), `attributes`→`attrs`, and `codecs`→`CodecPipeline` (bytes codec sets byteOrder). Reject unknown `zarr_format`/`data_type` with clear errors (FR-003, FR-004, FR-011, FR-021).
+- [X] T025 [US1] Extend `layout.detectNode` (`src/metadata/layout.ts`) to fully handle the v3 branch: parse `zarr.json`, return `{format:3, nodeType}`, and produce neutral meta via `src/metadata/v3.ts`. Apply the documented v3-first precedence when both markers exist.
+- [X] T026 [US1] Wire `open.ts` (`openArray`/`openGroup`/`open`) to use `layout.detectNode` and, for v3, construct `ZarrArray`/`ZarrGroup` from the v3 neutral meta + pipeline — no signature change (FR-001, FR-002).
 
 **Checkpoint**: A non-sharded v3 array and group read correctly through the unchanged public API.
 This is the MVP.

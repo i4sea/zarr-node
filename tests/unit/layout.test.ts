@@ -61,3 +61,63 @@ describe("layout.detectNode — v2 branches", () => {
     await expect(detectNode(read, "missing")).rejects.toThrow(/missing/);
   });
 });
+
+describe("layout.detectNode — v3 branches (US2)", () => {
+  const v3Array = {
+    zarr_format: 3,
+    node_type: "array",
+    shape: [4],
+    data_type: "int32",
+  };
+  const v3Group = { zarr_format: 3, node_type: "group" };
+
+  it("detects a v3 array from zarr.json node_type", async () => {
+    const read = reader({ "zarr.json": v3Array });
+    const node = await detectNode(read, "");
+    expect(node.format).toBe(3);
+    expect(node.nodeType).toBe("array");
+  });
+
+  it("detects a v3 group from zarr.json node_type", async () => {
+    const read = reader({ "sub/zarr.json": v3Group });
+    const node = await detectNode(read, "sub");
+    expect(node.format).toBe(3);
+    expect(node.nodeType).toBe("group");
+  });
+
+  it("v3 wins when both zarr.json and .zarray exist (precedence)", async () => {
+    const read = reader({
+      "zarr.json": v3Array,
+      ".zarray": { zarr_format: 2, shape: [4], chunks: [4], dtype: "<i4" },
+    });
+    const node = await detectNode(read, "");
+    expect(node.format).toBe(3);
+    expect(node.nodeType).toBe("array");
+  });
+
+  it("v3 wins when both zarr.json and .zgroup exist (precedence)", async () => {
+    const read = reader({
+      "zarr.json": v3Group,
+      ".zgroup": { zarr_format: 2 },
+    });
+    const node = await detectNode(read, "");
+    expect(node.format).toBe(3);
+    expect(node.nodeType).toBe("group");
+  });
+
+  it("throws MetadataError on an unknown zarr_format in zarr.json (FR-021)", async () => {
+    const read = reader({
+      "zarr.json": { zarr_format: 4, node_type: "array" },
+    });
+    await expect(detectNode(read, "")).rejects.toThrow(MetadataError);
+    await expect(detectNode(read, "")).rejects.toThrow(/zarr_format/);
+  });
+
+  it("throws MetadataError on an invalid node_type", async () => {
+    const read = reader({
+      "zarr.json": { zarr_format: 3, node_type: "dataset" },
+    });
+    await expect(detectNode(read, "")).rejects.toThrow(MetadataError);
+    await expect(detectNode(read, "")).rejects.toThrow(/node_type/);
+  });
+});
