@@ -43,11 +43,15 @@ export const codecRegistry: CodecRegistry = new CodecRegistryImpl();
 // Register built-in codecs (sync factories).
 import { GzipCodec } from "./gzip.js";
 import { BytesCodec } from "./bytes.js";
+import { TransposeCodec } from "./transpose.js";
+import { Crc32cCodec } from "./crc32c.js";
 
 codecRegistry.register("zlib", () => new GzipCodec("zlib"));
 codecRegistry.register("gzip", () => new GzipCodec("gzip"));
-// v3 `bytes` (endian) codec — array→bytes slot of every core v3 chain.
+// v3 codecs (feature 006):
 codecRegistry.register("bytes", (config) => new BytesCodec(config));
+codecRegistry.register("transpose", (config) => new TransposeCodec(config));
+codecRegistry.register("crc32c", () => new Crc32cCodec());
 
 // Lazy-load Blosc. `numcodecs` is ESM-only — its package.json `exports`
 // map has only an `"import"` condition. Two consequences for the CJS

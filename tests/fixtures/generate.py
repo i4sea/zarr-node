@@ -176,6 +176,57 @@ def generate_v3_uncompressed_2d(base: str) -> None:
     print(f"  v3_uncompressed_2d: shape={data.shape}, dtype={v3_dtype_name(data.dtype)}")
 
 
+def _v3_transpose_data():
+    return np.arange(600, dtype="<f4").reshape(20, 30)
+
+
+def generate_v3_transpose_blosc(base: str) -> None:
+    from zarr.codecs import TransposeCodec, BloscCodec
+    path = os.path.join(base, "v3_transpose_blosc")
+    data = _v3_transpose_data()
+    write_v3_array(path, data, chunks=(10, 15),
+                   filters=[TransposeCodec(order=(1, 0))],
+                   compressors=[BloscCodec(cname="lz4", clevel=5)])
+    print("  v3_transpose_blosc: transpose -> bytes -> blosc")
+
+
+def generate_v3_transpose_gzip(base: str) -> None:
+    from zarr.codecs import TransposeCodec, GzipCodec
+    path = os.path.join(base, "v3_transpose_gzip")
+    data = _v3_transpose_data()
+    write_v3_array(path, data, chunks=(10, 15),
+                   filters=[TransposeCodec(order=(1, 0))],
+                   compressors=[GzipCodec(level=1)])
+    print("  v3_transpose_gzip: transpose -> bytes -> gzip")
+
+
+def generate_v3_transpose_zstd(base: str) -> None:
+    from zarr.codecs import TransposeCodec, ZstdCodec
+    path = os.path.join(base, "v3_transpose_zstd")
+    data = _v3_transpose_data()
+    write_v3_array(path, data, chunks=(10, 15),
+                   filters=[TransposeCodec(order=(1, 0))],
+                   compressors=[ZstdCodec(level=3)])
+    print("  v3_transpose_zstd: transpose -> bytes -> zstd")
+
+
+def generate_v3_crc32c(base: str) -> None:
+    from zarr.codecs import Crc32cCodec
+    path = os.path.join(base, "v3_crc32c")
+    data = np.random.RandomState(11).standard_normal((16, 16)).astype("<f8")
+    write_v3_array(path, data, chunks=(8, 8), compressors=[Crc32cCodec()])
+    print("  v3_crc32c: bytes -> crc32c (checksum verified on decode)")
+
+
+def generate_v3_big_endian(base: str) -> None:
+    from zarr.codecs import BytesCodec
+    path = os.path.join(base, "v3_big_endian")
+    data = np.array([1.1, 2.2, 3.3, 4.4, 5.5], dtype="<f8")
+    write_v3_array(path, data, chunks=(5,), compressors=None,
+                   serializer=BytesCodec(endian="big"))
+    print("  v3_big_endian: bytes(endian=big), no compressor")
+
+
 def generate_v3_group(base: str) -> None:
     path = os.path.join(base, "v3_group")
     root = zarr.open_group(path, mode="w", zarr_format=3)
@@ -224,4 +275,9 @@ if __name__ == "__main__":
     generate_v3_chunked_2d(base)
     generate_v3_uncompressed_2d(base)
     generate_v3_group(base)
+    generate_v3_transpose_blosc(base)
+    generate_v3_transpose_gzip(base)
+    generate_v3_transpose_zstd(base)
+    generate_v3_crc32c(base)
+    generate_v3_big_endian(base)
     print("Done.")

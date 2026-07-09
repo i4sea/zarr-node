@@ -102,13 +102,13 @@ arg; both read correctly. Full existing v2 suite passes.
 
 ### Tests (write first, must fail)
 
-- [ ] T027 [P] [US2] Extend `tests/unit/layout.test.ts` with v3 cases: v3-array, v3-group, both-markers-present (v3 wins), unknown `zarr_format` in `zarr.json` → error (FR-001, FR-021, spec Edge Case).
-- [ ] T028 [P] [US2] Integration test in `tests/integration/v3-detection.test.ts`: same `openArray`/`openGroup` call resolves a v2 fixture and a v3 fixture correctly with no version argument (US2 acceptance 1–2).
+- [X] T027 [P] [US2] Extend `tests/unit/layout.test.ts` with v3 cases: v3-array, v3-group, both-markers-present (v3 wins), unknown `zarr_format` in `zarr.json` → error (FR-001, FR-021, spec Edge Case).
+- [X] T028 [P] [US2] Integration test in `tests/integration/v3-detection.test.ts`: same `openArray`/`openGroup` call resolves a v2 fixture and a v3 fixture correctly with no version argument (US2 acceptance 1–2).
 
 ### Implementation
 
-- [ ] T029 [US2] Confirm/finish the detection wiring from T025/T026 covers all branches and precedence; add a clear `MetadataError` for unknown `zarr_format` (FR-021).
-- [ ] T030 [US2] Regression gate: run the full existing v2 fixture + test suite unchanged and confirm 100% pass and public API signatures unchanged (`npm test && npm run lint`) (FR-002, FR-020, SC-002).
+- [X] T029 [US2] Confirm/finish the detection wiring from T025/T026 covers all branches and precedence; add a clear `MetadataError` for unknown `zarr_format` (FR-021).
+- [X] T030 [US2] Regression gate: run the full existing v2 fixture + test suite unchanged and confirm 100% pass and public API signatures unchanged (`npm test && npm run lint`) (FR-002, FR-020, SC-002).
 
 **Checkpoint**: Detection is automatic and v2 is provably non-regressed.
 
@@ -124,17 +124,17 @@ the compressor across the supported set.
 
 ### Tests (write first, must fail)
 
-- [ ] T031 [P] [US3] Unit test for the `bytes` codec in `tests/unit/codec-bytes.test.ts`: little/big endian interpretation with known byte pairs; sets `ResolvedDtype.byteOrder`; **`endian` omitted** (valid for 1-byte types `uint8`/`int8`/`bool`) resolves to `byteOrder: "none"` and does not throw.
-- [ ] T032 [P] [US3] Unit test for the `transpose` codec in `tests/unit/codec-transpose.test.ts`: axis-permutation inverse with known input/output.
-- [ ] T033 [P] [US3] Unit test for the `crc32c` codec in `tests/unit/codec-crc32c.test.ts`: matching checksum passes; mismatch throws a clear corruption error (FR-008a); known CRC-32C vectors.
-- [ ] T034 [P] [US3] Add fixtures via `generate.py` and an integration test `tests/integration/v3-codec-chain.test.ts`: `v3_transpose_blosc`, `v3_transpose_gzip`, `v3_transpose_zstd`, and a `v3_crc32c` fixture; compare to `expected.json` (US3 acceptance 1–3).
+- [X] T031 [P] [US3] Unit test for the `bytes` codec in `tests/unit/codec-bytes.test.ts`: little/big endian interpretation with known byte pairs; sets `ResolvedDtype.byteOrder`; **`endian` omitted** (valid for 1-byte types `uint8`/`int8`/`bool`) resolves to `byteOrder: "none"` and does not throw.
+- [X] T032 [P] [US3] Unit test for the `transpose` codec in `tests/unit/codec-transpose.test.ts`: axis-permutation inverse with known input/output.
+- [X] T033 [P] [US3] Unit test for the `crc32c` codec in `tests/unit/codec-crc32c.test.ts`: matching checksum passes; mismatch throws a clear corruption error (FR-008a); known CRC-32C vectors.
+- [X] T034 [P] [US3] Add fixtures via `generate.py` and an integration test `tests/integration/v3-codec-chain.test.ts`: `v3_transpose_blosc`, `v3_transpose_gzip`, `v3_transpose_zstd`, and a `v3_crc32c` fixture; compare to `expected.json` (US3 acceptance 1–3).
 
 ### Implementation
 
-- [ ] T035 [P] [US3] Implement the `bytes` (endian) codec in `src/codec/bytes.ts` as an array→bytes codec; register in `codecRegistry`; it resolves element byte order (FR-005, FR-008).
-- [ ] T036 [P] [US3] Implement the `transpose` codec in `src/codec/transpose.ts` as an array→array codec (inverse permutation on decode); register in `codecRegistry` (FR-008).
-- [ ] T037 [P] [US3] Implement CRC-32C (table-based, vendored per research R7) and the `crc32c` codec in `src/codec/crc32c.ts` as a bytes→bytes codec that verifies and throws on mismatch (FR-008a); register in `codecRegistry`.
-- [ ] T038 [US3] Ensure `zstd` is reachable in a v3 chain (via Blosc `cname:"zstd"` or standalone) and that `CodecPipeline` composes `transpose→bytes→compressor(→crc32c)` and decodes in reverse for real v3 fixtures (FR-007, FR-008). (Depends on T035–T037 and T009.)
+- [X] T035 [P] [US3] Implement the `bytes` (endian) codec in `src/codec/bytes.ts` as an array→bytes codec; register in `codecRegistry`; it resolves element byte order (FR-005, FR-008).
+- [X] T036 [P] [US3] Implement the `transpose` codec in `src/codec/transpose.ts` as an array→array codec (inverse permutation on decode); register in `codecRegistry` (FR-008).
+- [X] T037 [P] [US3] Implement CRC-32C (table-based, vendored per research R7) and the `crc32c` codec in `src/codec/crc32c.ts` as a bytes→bytes codec that verifies and throws on mismatch (FR-008a); register in `codecRegistry`.
+- [X] T038 [US3] Ensure `zstd` is reachable in a v3 chain (via Blosc `cname:"zstd"` or standalone) and that `CodecPipeline` composes `transpose→bytes→compressor(→crc32c)` and decodes in reverse for real v3 fixtures (FR-007, FR-008). (Depends on T035–T037 and T009.)
 
 **Checkpoint**: Full v3 codec chains decode correctly; the v2 filters gap is closed (from T015/T016).
 
