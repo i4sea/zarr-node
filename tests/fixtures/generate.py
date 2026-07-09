@@ -11,11 +11,16 @@ import zarr
 import numcodecs
 
 
-def save_expected(path: str, data: np.ndarray) -> None:
-    """Save expected values as JSON for test verification."""
+def save_expected(path: str, data: np.ndarray, dtype_name: str | None = None) -> None:
+    """Save expected values as JSON for test verification.
+
+    Schema is shared by v2 and v3 fixtures: {shape, dtype, data}. For v3
+    fixtures pass dtype_name (the v3 data_type name, e.g. "float32") so tests
+    can assert the reader surfaces v3 names instead of numpy typestrs.
+    """
     expected = {
         "shape": list(data.shape),
-        "dtype": data.dtype.str,
+        "dtype": dtype_name if dtype_name is not None else data.dtype.str,
         "data": data.flatten().tolist(),
     }
     with open(os.path.join(path, "expected.json"), "w") as f:
@@ -109,6 +114,53 @@ def generate_f_order(base: str) -> None:
     print(f"  f_order: shape={data.shape}, dtype={data.dtype}, order=F")
 
 
+# --- Zarr v3 fixtures (zarr_format=3, requires zarr-python >= 3) ---
+
+
+def v3_dtype_name(dtype) -> str:
+    """Map a numpy dtype to its Zarr v3 data_type name (e.g. <f4 -> float32)."""
+    dt = np.dtype(dtype)
+    if dt.kind == "b":
+        return "bool"
+    prefix = {"i": "int", "u": "uint", "f": "float"}[dt.kind]
+    return f"{prefix}{dt.itemsize * 8}"
+
+
+def write_v3_array(path: str, data: np.ndarray, chunks, **kwargs):
+    """Write a v3 array (zarr.json + c/... chunk keys) and its expected.json.
+
+    Extra kwargs go straight to zarr.create_array (compressors, serializer,
+    filters, shards, fill_value, chunk_key_encoding, ...).
+    """
+    z = zarr.create_array(store=path, shape=data.shape, dtype=data.dtype,
+                          chunks=chunks, zarr_format=3, overwrite=True,
+                          **kwargs)
+    z[:] = data
+    save_expected(path, data, dtype_name=v3_dtype_name(data.dtype))
+    return z
+
+
+def generate_v3_simple_1d(base: str) -> None:
+    path = os.path.join(base, "v3_simple_1d")
+    data = np.arange(10, dtype="<f4")
+    write_v3_array(path, data, chunks=(10,))
+    print(f"  v3_simple_1d: shape={data.shape}, dtype={v3_dtype_name(data.dtype)}")
+
+
+def generate_v3_chunked_2d(base: str) -> None:
+    path = os.path.join(base, "v3_chunked_2d")
+    data = np.arange(20000, dtype="<i4").reshape(100, 200)
+    write_v3_array(path, data, chunks=(10, 20))
+    print(f"  v3_chunked_2d: shape={data.shape}, dtype={v3_dtype_name(data.dtype)}")
+
+
+def generate_v3_uncompressed_2d(base: str) -> None:
+    path = os.path.join(base, "v3_uncompressed_2d")
+    data = np.random.RandomState(7).standard_normal((20, 30)).astype("<f8")
+    write_v3_array(path, data, chunks=(10, 10), compressors=None)
+    print(f"  v3_uncompressed_2d: shape={data.shape}, dtype={v3_dtype_name(data.dtype)}")
+
+
 if __name__ == "__main__":
     base = os.path.dirname(os.path.abspath(__file__))
     print("Generating Zarr v2 test fixtures...")
@@ -118,4 +170,8 @@ if __name__ == "__main__":
     generate_nested_groups(base)
     generate_big_endian(base)
     generate_f_order(base)
+    print("Generating Zarr v3 test fixtures...")
+    generate_v3_simple_1d(base)
+    generate_v3_chunked_2d(base)
+    generate_v3_uncompressed_2d(base)
     print("Done.")
