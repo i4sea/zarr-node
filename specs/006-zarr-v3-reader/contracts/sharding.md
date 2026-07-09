@@ -9,10 +9,29 @@ byte-range. This is where the feature's performance benefit is realized (SC-004)
 
 **None.** A sharded array reads through the same `ZarrArray.get(selection)`.
 
+## Where sharding lives (loader vs codec)
+
+Sharding is **not** a plain `bytes→bytes` `Codec`. A plain codec receives an already-fetched
+`Uint8Array` and returns bytes; sharding must decide *what to fetch* — it needs the `store`, the
+shard key, `getRange`, and the inner-chunk geometry **before** any bytes are read. So the
+sharded-vs-non-sharded decision is made by the **read path** (a sharded array's chunk read is
+routed to the sharding reader), and the sharding reader in turn **uses** an inner `CodecPipeline`
+to decode each inner-chunk. The `sharding_indexed` entry occupies the array→bytes slot of the outer
+chain, but it is materialized as this store-aware reader rather than run through `pipeline.decode()`
+like an ordinary codec. Registering it in `codecRegistry` is for discovery/parse; its execution
+contract is the read strategy below, not the plain `decode(data, ctx)` signature.
+
 ## Shard index
 
 - Layout: `N` entries of two `uint64` values `(offset, nbytes)`, one per inner-chunk, in the shard's
   chunk order. Index location (end-of-shard by default; start allowed) comes from the codec config.
+- The index bytes are themselves encoded by the shard's `index_codecs` (typically `bytes` little-endian
+  `+ crc32c`), so the reader MUST decode the index through that sub-pipeline before reading `(offset,
+  nbytes)` pairs — it is not raw `uint64` on the wire when `crc32c` is present. A failing index
+  `crc32c` ⇒ corruption error (FR-008a), same as any chunk.
+- Index size is derived, not stored: `N × 16 bytes` (+ the `index_codecs` checksum overhead). This
+  is what lets a `getRange` store read only the index region (a suffix range for end-of-shard) without
+  fetching the whole shard.
 - Reserved empty marker: `offset === nbytes === 2^64 - 1` ⇒ inner-chunk is empty ⇒ fill value
   (FR-011, FR-012). No read is issued for empty inner-chunks.
 - A missing or malformed index ⇒ clear error (spec Edge Case), never a partial/garbage read.

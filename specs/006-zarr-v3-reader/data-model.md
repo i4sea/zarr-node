@@ -21,7 +21,7 @@ parsers.
 | `dtype` | `ResolvedDtype` | Resolved TypedArray ctor + byte size + byte order (see below) |
 | `codecPipeline` | `CodecPipeline` | Ordered decode chain (see contracts) |
 | `fillValue` | `number \| bigint \| boolean \| null` | Interpreted per dtype (incl. `NaN`/`±Inf`) |
-| `order` | `"C" \| "F"` | Memory order (v3 transpose may express this via codec) |
+| `order` | `"C" \| "F"` | Memory order. v2: from `.zarray` `order`. **v3: always `"C"`** — v3 has no `order` field; any axis permutation is expressed solely by the `transpose` codec in the pipeline. The v3 parser MUST NOT also set `order` from a transpose (double-permutation bug); the pipeline owns it. |
 | `chunkKey` | `ChunkKeyStrategy` | How a chunk coord → store key (see below) |
 | `attrs` | `Record<string, unknown>` | User attributes (`.zattrs` for v2; `attributes` in `zarr.json` for v3) |
 

@@ -24,10 +24,10 @@ keep the v2 suite green.
 
 **Purpose**: Prepare the v3 fixture toolchain and the source module skeleton. No behavior yet.
 
-- [ ] T001 Extend `tests/fixtures/generate.py` with a `zarr_format=3` code path (parallel to the existing v2 generators): a helper that writes `zarr.json` + `c/…` chunk keys and reuses the existing `save_expected` (`expected.json`) schema unchanged.
-- [ ] T002 [P] Generate the baseline v3 fixtures via `generate.py`: `v3_simple_1d`, `v3_chunked_2d`, `v3_uncompressed_2d` (non-sharded, default codec chain) under `tests/fixtures/`.
-- [ ] T003 [P] Create empty source module files with type stubs and `// TODO(006)` markers: `src/metadata/v3.ts`, `src/metadata/layout.ts`, `src/metadata/consolidated-v3.ts`, `src/codec/pipeline.ts`, `src/codec/bytes.ts`, `src/codec/transpose.ts`, `src/codec/crc32c.ts`, `src/codec/sharding.ts`.
-- [ ] T004 [P] Confirm `npm test && npm run lint` runs green on the untouched tree (baseline for no-regression verification later).
+- [X] T001 Extend `tests/fixtures/generate.py` with a `zarr_format=3` code path (parallel to the existing v2 generators): a helper that writes `zarr.json` + `c/…` chunk keys and reuses the existing `save_expected` (`expected.json`) schema unchanged.
+- [X] T002 [P] Generate the baseline v3 fixtures via `generate.py`: `v3_simple_1d`, `v3_chunked_2d`, `v3_uncompressed_2d` (non-sharded, default codec chain) under `tests/fixtures/`.
+- [X] T003 [P] Create empty source module files with type stubs and `// TODO(006)` markers: `src/metadata/v3.ts`, `src/metadata/layout.ts`, `src/metadata/consolidated-v3.ts`, `src/codec/pipeline.ts`, `src/codec/bytes.ts`, `src/codec/transpose.ts`, `src/codec/crc32c.ts`, `src/codec/sharding.ts`.
+- [X] T004 [P] Confirm `npm test && npm run lint` runs green on the untouched tree (baseline for no-regression verification later).
 
 **Checkpoint**: Fixture pipeline can emit v3 data; module skeleton and green baseline exist.
 
@@ -56,7 +56,7 @@ depends on this.** This phase MUST leave the existing v2 fixtures and tests pass
 - [ ] T013 Refactor `ZarrGroup` (`src/group.ts`) child detection/keys to go through `layout` (`detectNode` + key construction) instead of hard-coded `.zarray`/`.zgroup`/`.zattrs`, preserving public signatures.
 - [ ] T014 Generalize `LoadChunksContext` in `src/chunk/loader.ts` to carry a `CodecPipeline` instead of a single `Codec | null`; route `decodeRaw` through `pipeline.decode`. Keep the decode-pool offload for the heavy bytes→bytes stage (`shouldOffload`) working for v2 blosc.
 - [ ] T015 Wire `open.ts` to build a v2 `CodecPipeline` from `meta.compressor` **plus** `meta.filters` (this applies the previously-parsed-but-unused v2 filters — FR-009) and pass neutral meta + pipeline into `ZarrArray`.
-- [ ] T016 Run `npm test && npm run lint`: all **existing v2 fixtures and tests pass unchanged** (FR-020 regression gate). Add a `tests/unit/pipeline.test.ts` case proving a v2 array declaring a `filters` entry now applies it on decode.
+- [ ] T016 Run `npm test && npm run lint`: all **existing v2 fixtures and tests pass unchanged** (FR-020 regression gate — safe because every existing v2 `.zarray` is `filters: null`). Then cover the FR-009 behavior change: add a `v2_filtered` fixture via `generate.py` (a v2 array declaring a non-null `filters` entry) with its `expected.json`, plus a `tests/unit/pipeline.test.ts` case, proving the filter is now applied on decode.
 
 **Checkpoint**: v2 reads through the neutral seam with zero behavior change; the pipeline and
 layout abstractions exist and are unit-tested. User stories can now begin.
@@ -124,7 +124,7 @@ the compressor across the supported set.
 
 ### Tests (write first, must fail)
 
-- [ ] T031 [P] [US3] Unit test for the `bytes` codec in `tests/unit/codec-bytes.test.ts`: little/big endian interpretation with known byte pairs; sets `ResolvedDtype.byteOrder`.
+- [ ] T031 [P] [US3] Unit test for the `bytes` codec in `tests/unit/codec-bytes.test.ts`: little/big endian interpretation with known byte pairs; sets `ResolvedDtype.byteOrder`; **`endian` omitted** (valid for 1-byte types `uint8`/`int8`/`bool`) resolves to `byteOrder: "none"` and does not throw.
 - [ ] T032 [P] [US3] Unit test for the `transpose` codec in `tests/unit/codec-transpose.test.ts`: axis-permutation inverse with known input/output.
 - [ ] T033 [P] [US3] Unit test for the `crc32c` codec in `tests/unit/codec-crc32c.test.ts`: matching checksum passes; mismatch throws a clear corruption error (FR-008a); known CRC-32C vectors.
 - [ ] T034 [P] [US3] Add fixtures via `generate.py` and an integration test `tests/integration/v3-codec-chain.test.ts`: `v3_transpose_blosc`, `v3_transpose_gzip`, `v3_transpose_zstd`, and a `v3_crc32c` fixture; compare to `expected.json` (US3 acceptance 1–3).
@@ -150,15 +150,15 @@ recording store assert only inner-chunk ranges were requested and zero full-shar
 
 ### Tests (write first, must fail)
 
-- [ ] T039 [P] [US4] Unit test for shard-index parsing in `tests/unit/sharding-index.test.ts`: `(offset, nbytes)` `uint64` pairs; reserved empty marker `2^64-1` → empty inner-chunk; malformed/missing index → clear error (FR-012, FR-021, spec Edge Case).
+- [ ] T039 [P] [US4] Unit test for shard-index parsing in `tests/unit/sharding-index.test.ts`: index decoded through the shard's `index_codecs` (typically `bytes` LE `+ crc32c`) before reading `(offset, nbytes)` `uint64` pairs; derived index size (`N × 16` + checksum overhead); reserved empty marker `2^64-1` → empty inner-chunk; failing index `crc32c` → corruption error (FR-008a); malformed/missing index → clear error (FR-012, FR-021, spec Edge Case).
 - [ ] T040 [P] [US4] Unit test for byte-range coalescing in `tests/unit/sharding-coalesce.test.ts`: contiguous ranges always merge; gap ≤ threshold merges; gap > threshold stays separate (FR-015, clarification).
 - [ ] T041 [P] [US4] Unit test for strategy selection in `tests/unit/sharding-strategy.test.ts` using a recording mock `Store`: with `getRange`, only inner-chunk ranges requested and **zero** whole-shard `get` (SC-004); without `getRange`, whole-shard fetch + in-memory slice (FR-013, FR-014).
-- [ ] T042 [P] [US4] Add a `v3_sharded` fixture via `generate.py` and integration test `tests/integration/v3-sharded.test.ts`: read full + sub-region, compare to `expected.json`, over a `getRange` `FileSystemStore` and a range-less store variant (US4 acceptance 1–5); include a corrupt-inner-chunk `crc32c` case.
+- [ ] T042 [P] [US4] Add a `v3_sharded` fixture via `generate.py` and integration test `tests/integration/v3-sharded.test.ts`: read full + sub-region, compare to `expected.json`, over a `getRange` `FileSystemStore` and a range-less store variant (US4 acceptance 1–5); include a corrupt-inner-chunk `crc32c` case. `HTTPStore`/`S3Store` already implement `getRange` (http.ts:77, s3.ts:161), so their range behavior is exercised by the shared `store.contract.ts`; assert here only that the sharding reader issues `getRange` (not full-shard `get`) via the recording mock, keeping the transport-specific range coverage in the contract suite.
 
 ### Implementation
 
-- [ ] T043 [US4] Relax the loader's `getRange` gating in `src/chunk/loader.ts`: today `getRange` is used only when `codec === null`; allow the sharding path to range-read compressed inner-chunks, scoped so non-sharded reads keep current behavior (research R6).
-- [ ] T044 [US4] Implement the `sharding_indexed` codec in `src/codec/sharding.ts`: read shard index (location from config), map touched inner-chunks, handle empty markers → fill value, decode inner-chunks through their inner `CodecPipeline`; register in `codecRegistry` (FR-012).
+- [ ] T043 [US4] Route sharded arrays to the sharding reader and relax the loader's `getRange` gating in `src/chunk/loader.ts`: today `getRange` is used only when `codec === null` (loader.ts:95). A sharded array's chunk read must be dispatched to the store-aware sharding reader (which is NOT `pipeline.decode()` — see contracts/sharding.md "Where sharding lives") rather than the ordinary decode path, and that path must be allowed to range-read compressed inner-chunks. Scope the relaxation so non-sharded reads keep current behavior (research R6).
+- [ ] T044 [US4] Implement the `sharding_indexed` reader in `src/codec/sharding.ts` as a **store-aware reader**, not a plain `pipeline.decode()` codec (it needs `store`/`getRange`/shard key/geometry before any bytes are read — see contracts/sharding.md): read the shard index at its configured location, **decode it through the shard's `index_codecs`**, map touched inner-chunks, handle empty markers → fill value, decode inner-chunks through their inner `CodecPipeline`; register in `codecRegistry` for discovery/parse (FR-012).
 - [ ] T045 [US4] Implement byte-range read + coalescing in `src/codec/sharding.ts`: `getRange` per coalesced span with configurable gap threshold (default ~1 MB), contiguous always merged; whole-shard fallback when `getRange` absent (FR-013, FR-014, FR-015). (Depends on T043, T044.)
 
 **Checkpoint**: Sharded sub-region reads use byte-ranges with zero full-shard downloads; values
@@ -232,7 +232,7 @@ without per-node metadata fetches and read correct values.
 
 ### Parallel Opportunities
 
-- Setup: T002, T003, T004 in parallel.
+- Setup: T003 and T004 in parallel; T002 runs after T001 (it uses the v3 code path T001 adds to `generate.py`), and can overlap T003/T004.
 - Foundational tests T005–T007 in parallel; then implementation (T008/T009 parallel; T010–T015 largely sequential on shared files `array.ts`/`open.ts`/`loader.ts`).
 - US1 tests T017–T020 in parallel; T021/T022 in parallel.
 - US3 codecs T035/T036/T037 in parallel (different files); tests T031–T034 in parallel.

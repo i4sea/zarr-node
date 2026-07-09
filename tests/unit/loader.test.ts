@@ -4,7 +4,7 @@ import type { ChunkTask, LoadedChunk } from "../../src/chunk/loader.js";
 import { ByteLimiter } from "../../src/chunk/limiter.js";
 import { MissingChunkError } from "../../src/errors.js";
 import type { Store } from "../../src/store/store.js";
-import type { Codec } from "../../src/codec/codec.js";
+import { CodecPipeline } from "../../src/codec/pipeline.js";
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -35,13 +35,23 @@ function probingStore(holdMs = 10): {
   return { store, maxConcurrent: () => max };
 }
 
-// Identity codec so the loader treats chunks as "compressed" (decode path).
-const identityCodec: Codec = {
-  id: "identity",
-  async decode(data) {
-    return data;
+// Identity pipeline whose id is NOT a known byte-identity, so the loader
+// treats chunks as "compressed" (decode path, no byte-range reads).
+const identityCodec = new CodecPipeline([
+  {
+    kind: "array->bytes",
+    config: { id: "identity" },
+    codec: {
+      id: "identity",
+      async decode(data: Uint8Array) {
+        return data;
+      },
+    },
   },
-};
+]);
+
+// Pass-through pipeline: the uncompressed case (byte-range path is active).
+const passthrough = CodecPipeline.passthrough();
 
 function makeTasks(n: number): ChunkTask[] {
   return Array.from({ length: n }, (_, i) => ({
@@ -110,7 +120,7 @@ describe("loadChunks — bounded in-flight memory", () => {
     const delivered: LoadedChunk[] = [];
     await loadChunks(
       store,
-      null, // uncompressed -> byte-range path is active
+      passthrough, // uncompressed -> byte-range path is active
       [{ key: "0", chunkCoord: [0], byteRange: { offset: 0, length: 16 } }],
       { concurrency: 4, limiter: new ByteLimiter(1024), peakPerChunk: 4096 },
       (c) => delivered.push(c),
@@ -181,7 +191,7 @@ describe("loadChunks — missing chunks (onMissingChunk / strict)", () => {
 
     await loadChunks(
       emptyStore,
-      null, // uncompressed -> byte-range path is active
+      passthrough, // uncompressed -> byte-range path is active
       [{ key: "0", chunkCoord: [0], byteRange: { offset: 0, length: 16 } }],
       {
         concurrency: 4,
@@ -232,7 +242,7 @@ describe("loadChunks — missing chunks (onMissingChunk / strict)", () => {
     await expect(
       loadChunks(
         emptyStore,
-        null,
+        passthrough,
         [{ key: "7", chunkCoord: [7], byteRange: { offset: 0, length: 16 } }],
         {
           concurrency: 4,

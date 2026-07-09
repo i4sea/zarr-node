@@ -33,8 +33,8 @@ interface CodecPipeline {
 | `transpose` | array→array | Invert the declared axis permutation on decode |
 | `bytes` | array→bytes | Interpret bytes as elements using its `endian` field; sets `ResolvedDtype.byteOrder` |
 | `blosc` / `gzip` / `zstd` | bytes→bytes | Reuse existing (zstd via Blosc `cname:"zstd"`) |
-| `crc32c` | bytes→bytes | Verify checksum; **throw corruption error on mismatch** (FR-008a) |
-| `sharding_indexed` | array→bytes (special) | Owns inner-chunk decode; see sharding.md |
+| `crc32c` | bytes→bytes | Split trailing 4-byte checksum, verify over the rest, **throw on mismatch** (FR-008a); returns the payload **without** the checksum (output is 4 bytes shorter than input) |
+| `sharding_indexed` | array→bytes (special) | Store-aware reader, NOT run via `pipeline.decode()`; owns inner-chunk fetch+decode — see sharding.md |
 
 ## Loader integration
 

@@ -1,19 +1,14 @@
 import type { Store } from "./store/store.js";
-import type { ZarrayMeta, Zattrs } from "./metadata/types.js";
-import type { Codec } from "./codec/codec.js";
+import type { ResolvedArrayMeta } from "./metadata/types.js";
+import type { CodecPipeline, ChunkDecodeContext } from "./codec/pipeline.js";
 import type { DecodePool } from "./codec/decode-pool.js";
-import type { TypedArray } from "./dtype.js";
+import type { TypedArray, TypedArrayConstructor } from "./dtype.js";
 import type { MemoryCache } from "./cache/memory.js";
 import type { ObservabilityHooks } from "./observability.js";
-import {
-  dtypeToTypedArrayCtor,
-  dtypeByteSize,
-  isBigEndian,
-  byteSwap,
-} from "./dtype.js";
+import { byteSwap, halfToFloat32 } from "./dtype.js";
 import {
   computeChunkRanges,
-  chunkKey,
+  encodeChunkKey,
   allChunkCoords,
   cStrides,
   fStrides,
@@ -105,39 +100,34 @@ export class ZarrArray {
   readonly attrs: Readonly<Record<string, unknown>>;
 
   private readonly store: Store;
-  private readonly meta: ZarrayMeta;
+  private readonly meta: ResolvedArrayMeta;
   private readonly basePath: string;
-  private readonly codec: Codec | null;
+  private readonly pipeline: CodecPipeline;
+  private readonly decodeContext: ChunkDecodeContext;
 
-  constructor(
-    store: Store,
-    meta: ZarrayMeta,
-    attrs: Zattrs,
-    basePath: string,
-    codec: Codec | null,
-  ) {
+  constructor(store: Store, meta: ResolvedArrayMeta) {
     this.store = store;
     this.meta = meta;
     this.shape = meta.shape;
-    this.chunks = meta.chunks;
-    this.dtype = meta.dtype;
+    this.chunks = meta.chunkShape;
+    this.dtype = meta.dtypeName;
     this.order = meta.order;
-    this.attrs = attrs;
-    this.basePath = basePath;
+    this.attrs = meta.attrs;
+    this.basePath = meta.chunkKey.basePath ?? "";
+    this.pipeline = meta.codecPipeline;
+    this.decodeContext = { chunkShape: meta.chunkShape, dtype: meta.dtype };
 
-    // Resolve fill_value
-    if (meta.fill_value === null || meta.fill_value === "NaN") {
-      this.fillValue = meta.fill_value === "NaN" ? NaN : null;
-    } else if (meta.fill_value === "Infinity") {
-      this.fillValue = Infinity;
-    } else if (meta.fill_value === "-Infinity") {
-      this.fillValue = -Infinity;
-    } else {
-      this.fillValue =
-        typeof meta.fill_value === "number" ? meta.fill_value : null;
-    }
-
-    this.codec = codec;
+    // Public field keeps its historical `number | null` shape; the resolved
+    // fill (which may be bigint/boolean for v3) drives prefill internally.
+    const fv = meta.fillValue;
+    this.fillValue =
+      typeof fv === "number"
+        ? fv
+        : typeof fv === "bigint"
+          ? Number(fv)
+          : typeof fv === "boolean"
+            ? Number(fv)
+            : null;
   }
 
   async get(selection?: Slice, options?: ReadOptions): Promise<TypedArray> {
@@ -190,40 +180,58 @@ export class ZarrArray {
   private peakPerChunk(chunkByteSize: number): number {
     // Compressed decode transiently holds compressed input + decoded output
     // (~2×). Big-endian data is copied once more before the in-place byte swap
-    // (`toTypedChunk`), adding another full-chunk buffer (+1×).
-    const decodeFactor = this.codec ? DECODE_PEAK_FACTOR : 1;
-    const byteSwapFactor = isBigEndian(this.dtype) ? 1 : 0;
-    return chunkByteSize * (decodeFactor + byteSwapFactor);
+    // (`toTypedChunk`), adding another full-chunk buffer (+1×). float16
+    // widening allocates a Float32Array at 2× the stored halves (+2×).
+    const decodeFactor = this.pipeline.isPassthrough ? 1 : DECODE_PEAK_FACTOR;
+    const byteSwapFactor = this.meta.dtype.byteOrder === "big" ? 1 : 0;
+    const widenFactor = this.meta.dtype.widenHalfToFloat ? 2 : 0;
+    return chunkByteSize * (decodeFactor + byteSwapFactor + widenFactor);
   }
 
   /**
    * Pre-fill a freshly allocated output with the array's fill_value, so
    * regions whose chunks are absent from the store come back as fill_value
    * (missing chunks are never delivered by the loader). TypedArrays are
-   * zero-initialized, so 0/null fill values need no pass.
+   * zero-initialized, so 0/null/false fill values need no pass.
    */
   private prefillOutput(output: TypedArray): void {
-    const fv = this.fillValue;
-    if (fv === null || fv === 0) return;
+    const fv = this.meta.fillValue;
+    if (fv === null || fv === 0 || fv === false) return;
     if (output instanceof BigInt64Array || output instanceof BigUint64Array) {
-      // JSON fill_value is a number; non-finite values are unrepresentable.
-      if (Number.isFinite(fv)) output.fill(BigInt(Math.trunc(fv)));
+      if (typeof fv === "bigint") {
+        output.fill(fv);
+      } else if (typeof fv === "boolean") {
+        output.fill(fv ? 1n : 0n);
+      } else if (Number.isFinite(fv)) {
+        // JSON fill_value is a number; non-finite values are unrepresentable.
+        output.fill(BigInt(Math.trunc(fv)));
+      }
       return;
     }
-    output.fill(fv);
+    const numeric =
+      typeof fv === "bigint" ? Number(fv) : typeof fv === "boolean" ? 1 : fv;
+    output.fill(numeric);
   }
 
-  /** Build a Ctor-typed view over chunk bytes, byte-swapping big-endian data. */
-  private toTypedChunk(
-    data: Uint8Array,
-    Ctor: ReturnType<typeof dtypeToTypedArrayCtor>,
-    byteSize: number,
-    bigEndian: boolean,
-  ): TypedArray {
+  /**
+   * Build a typed view over decoded chunk bytes: byte-swap big-endian data,
+   * widen float16 halves into a Float32Array.
+   */
+  private toTypedChunk(data: Uint8Array): TypedArray {
+    const { ctor: Ctor, byteSize, byteOrder, widenHalfToFloat } =
+      this.meta.dtype;
     let chunkBuf = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
-    if (bigEndian) {
+    if (byteOrder === "big") {
       chunkBuf = Buffer.from(chunkBuf); // copy before in-place swap
       byteSwap(chunkBuf, byteSize);
+    }
+    if (widenHalfToFloat) {
+      const halves = new Uint16Array(
+        chunkBuf.buffer as ArrayBuffer,
+        chunkBuf.byteOffset,
+        chunkBuf.byteLength / 2,
+      );
+      return halfToFloat32(halves);
     }
     return new Ctor(
       chunkBuf.buffer as ArrayBuffer,
@@ -253,32 +261,35 @@ export class ZarrArray {
     const decodePool = ctx.decodePool;
     const ndim = this.shape.length;
     const ranges = computeChunkRanges(this.shape, this.chunks);
-    const byteSize = dtypeByteSize(this.dtype);
+    const byteSize = this.meta.dtype.byteSize;
     const chunkElements = this.chunks.reduce((a, b) => a * b, 1);
     const chunkByteSize = chunkElements * byteSize;
 
     // Allocate output up front so chunks can be copied in on arrival.
     const totalElements = this.shape.reduce((a, b) => a * b, 1);
-    this.maybeWarnLargeRead(totalElements * byteSize, warnBytes, true);
-    const Ctor = dtypeToTypedArrayCtor(this.dtype);
+    const Ctor: TypedArrayConstructor = this.meta.dtype.ctor;
+    this.maybeWarnLargeRead(
+      totalElements * Ctor.BYTES_PER_ELEMENT,
+      warnBytes,
+      true,
+    );
     const output = new Ctor(totalElements);
     this.prefillOutput(output);
-    const bigEndian = isBigEndian(this.dtype);
     const outputStrides = cStrides(this.shape);
 
     // Build chunk tasks
     const tasks: ChunkTask[] = [];
     for (const coord of allChunkCoords(ranges)) {
-      const key = this.basePath
-        ? `${this.basePath}/${chunkKey(coord, this.meta.dimension_separator)}`
-        : chunkKey(coord, this.meta.dimension_separator);
-      tasks.push({ key, chunkCoord: coord });
+      tasks.push({
+        key: encodeChunkKey(coord, this.meta.chunkKey),
+        chunkCoord: coord,
+      });
     }
 
     // Stream chunks into the output as they decode; buffers drop right after.
     await loadChunks(
       this.store,
-      this.codec,
+      this.pipeline,
       tasks,
       {
         concurrency,
@@ -288,15 +299,10 @@ export class ZarrArray {
         observability: hooks,
         strict,
         decodePool,
-        compressorConfig: this.meta.compressor,
+        decodeContext: this.decodeContext,
       },
       (chunk: LoadedChunk) => {
-        const chunkTyped = this.toTypedChunk(
-          chunk.data,
-          Ctor,
-          byteSize,
-          bigEndian,
-        );
+        const chunkTyped = this.toTypedChunk(chunk.data);
 
         // Compute actual chunk size (edge chunks may be smaller than chunk shape)
         const actualChunkShape = this.chunks.map((c, d) => {
@@ -367,7 +373,7 @@ export class ZarrArray {
     const decodePool = ctx.decodePool;
     const ndim = this.shape.length;
     const ranges = normalizeSelection(selection, this.shape);
-    const byteSize = dtypeByteSize(this.dtype);
+    const byteSize = this.meta.dtype.byteSize;
     const chunkElements = this.chunks.reduce((a, b) => a * b, 1);
     const chunkByteSize = chunkElements * byteSize;
 
@@ -377,16 +383,16 @@ export class ZarrArray {
     // Build chunk tasks (only needed chunks)
     // For uncompressed C-order arrays, try to compute byte ranges for partial reads
     const canByteRange =
-      this.codec === null &&
+      this.pipeline.isPassthrough &&
       this.order === "C" &&
       typeof this.store.getRange === "function";
 
     const tasks: ChunkTask[] = [];
     for (const coord of allChunkCoords(chunkRanges)) {
-      const key = this.basePath
-        ? `${this.basePath}/${chunkKey(coord, this.meta.dimension_separator)}`
-        : chunkKey(coord, this.meta.dimension_separator);
-      const task: ChunkTask = { key, chunkCoord: coord };
+      const task: ChunkTask = {
+        key: encodeChunkKey(coord, this.meta.chunkKey),
+        chunkCoord: coord,
+      };
 
       if (canByteRange) {
         const br = this.computeChunkByteRange(coord, ranges, byteSize);
@@ -401,16 +407,19 @@ export class ZarrArray {
     // Allocate output up front so chunks can be copied in on arrival.
     const outputShape = ranges.map((r) => r.stop - r.start);
     const totalElements = outputShape.reduce((a, b) => a * b, 1);
-    this.maybeWarnLargeRead(totalElements * byteSize, warnBytes, false);
-    const Ctor = dtypeToTypedArrayCtor(this.dtype);
+    const Ctor: TypedArrayConstructor = this.meta.dtype.ctor;
+    this.maybeWarnLargeRead(
+      totalElements * Ctor.BYTES_PER_ELEMENT,
+      warnBytes,
+      false,
+    );
     const output = new Ctor(totalElements);
     this.prefillOutput(output);
-    const bigEndian = isBigEndian(this.dtype);
     const outputStrides = cStrides(outputShape);
 
     await loadChunks(
       this.store,
-      this.codec,
+      this.pipeline,
       tasks,
       {
         concurrency,
@@ -420,15 +429,10 @@ export class ZarrArray {
         observability: hooks,
         strict,
         decodePool,
-        compressorConfig: this.meta.compressor,
+        decodeContext: this.decodeContext,
       },
       (chunk: LoadedChunk) => {
-        const chunkTyped = this.toTypedChunk(
-          chunk.data,
-          Ctor,
-          byteSize,
-          bigEndian,
-        );
+        const chunkTyped = this.toTypedChunk(chunk.data);
 
         if (chunk.partial) {
           // Partial byte-range read: data is already the contiguous overlap

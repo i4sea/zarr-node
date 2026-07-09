@@ -1,3 +1,6 @@
+import type { TypedArrayConstructor } from "../dtype.js";
+import type { CodecPipeline } from "../codec/pipeline.js";
+
 export interface CompressorConfig {
   id: string;
   [key: string]: unknown;
@@ -25,3 +28,63 @@ export interface ZgroupMeta {
 }
 
 export type Zattrs = Record<string, unknown>;
+
+// --- Version-neutral resolved metadata (feature 006) ---
+//
+// Both the v2 (.zarray/.zgroup) and v3 (zarr.json) parsers produce these
+// types, so the entire downstream read path (ZarrArray, loadChunks, caches,
+// stores) is shared and format-agnostic.
+
+/** Element byte order. v2: from the typestr prefix; v3: from the `bytes` codec. */
+export type ByteOrder = "little" | "big" | "none";
+
+/** Resolved element type consumed by the read path. */
+export interface ResolvedDtype {
+  /** TypedArray constructor the read materializes into. */
+  ctor: TypedArrayConstructor;
+  /** STORED element size in bytes (`float16` = 2 even though it widens). */
+  byteSize: number;
+  byteOrder: ByteOrder;
+  /** True for `float16`: stored halves decode into a Float32Array. */
+  widenHalfToFloat: boolean;
+}
+
+/** How a chunk coordinate maps to a store key. */
+export interface ChunkKeyStrategy {
+  /** Encoding family: v2 (`0.0`) or the v3 default (`c/0/0`). */
+  kind: "v2" | "v3-default";
+  separator: "." | "/";
+  /** v3-default uses `"c"`; v2 uses none. */
+  prefix: string | null;
+  /** Node path prefix folded into every chunk key (null at the store root). */
+  basePath: string | null;
+}
+
+/** Version-neutral description of an array node consumed by `ZarrArray`. */
+export interface ResolvedArrayMeta {
+  /** Which format produced this (diagnostics / consolidated lookup). */
+  zarrFormat: 2 | 3;
+  shape: number[];
+  /** Regular chunk grid cell shape (the shard shape for sharded v3 arrays). */
+  chunkShape: number[];
+  /** Original dtype spelling surfaced as `ZarrArray.dtype` (v2 typestr / v3 name). */
+  dtypeName: string;
+  dtype: ResolvedDtype;
+  /** Ordered decode chain (see contracts/codec-pipeline.md). */
+  codecPipeline: CodecPipeline;
+  /** Interpreted per dtype (incl. NaN/±Infinity). */
+  fillValue: number | bigint | boolean | null;
+  /**
+   * Memory order. v2: from `.zarray` `order`. v3: always "C" — any axis
+   * permutation is expressed solely by the `transpose` codec in the pipeline.
+   */
+  order: "C" | "F";
+  chunkKey: ChunkKeyStrategy;
+  attrs: Zattrs;
+}
+
+/** Version-neutral description of a group node. */
+export interface ResolvedGroupMeta {
+  zarrFormat: 2 | 3;
+  attrs: Zattrs;
+}

@@ -71,6 +71,32 @@ export function isBigEndian(dtype: string): boolean {
   return dtype.startsWith(">");
 }
 
+/**
+ * Convert IEEE 754 binary16 (half) values to a Float32Array (feature 006:
+ * v3 `float16` widens on decode — Node has no guaranteed native Float16Array).
+ */
+export function halfToFloat32(halves: Uint16Array): Float32Array {
+  const out = new Float32Array(halves.length);
+  for (let i = 0; i < halves.length; i++) {
+    const h = halves[i];
+    const sign = (h & 0x8000) >> 15;
+    const exp = (h & 0x7c00) >> 10;
+    const frac = h & 0x03ff;
+    let value: number;
+    if (exp === 0) {
+      // Subnormal (or zero): value = frac * 2^-24
+      value = frac * 2 ** -24;
+    } else if (exp === 0x1f) {
+      value = frac ? NaN : Infinity;
+    } else {
+      // Normal: 1.frac * 2^(exp-15)
+      value = (1 + frac * 2 ** -10) * 2 ** (exp - 15);
+    }
+    out[i] = sign ? -value : value;
+  }
+  return out;
+}
+
 export function byteSwap(buf: Buffer, byteSize: number): void {
   if (byteSize <= 1) return;
   if (byteSize === 2) {

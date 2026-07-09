@@ -103,6 +103,21 @@ def generate_big_endian(base: str) -> None:
     print(f"  big_endian: shape={data.shape}, dtype={data.dtype}")
 
 
+def generate_v2_filtered(base: str) -> None:
+    """v2 array declaring a non-null `filters` entry (FR-009: filters are now
+    applied on decode). Uses Zlib as the filter (bytes→bytes, registered in
+    the reader) with no compressor, so decode succeeds only if the filter runs.
+    """
+    path = os.path.join(base, "v2_filtered")
+    data = np.arange(300, dtype="<i4").reshape(15, 20)
+    z = zarr.open_array(path, mode="w", shape=data.shape, dtype=data.dtype,
+                        chunks=(5, 10), compressor=None,
+                        filters=[numcodecs.Zlib(level=1)], zarr_format=2)
+    z[:] = data
+    save_expected(path, data)
+    print(f"  v2_filtered: shape={data.shape}, dtype={data.dtype}, filters=[zlib]")
+
+
 def generate_f_order(base: str) -> None:
     path = os.path.join(base, "f_order")
     data = np.arange(12, dtype="<f4").reshape(3, 4)
@@ -170,6 +185,7 @@ if __name__ == "__main__":
     generate_nested_groups(base)
     generate_big_endian(base)
     generate_f_order(base)
+    generate_v2_filtered(base)
     print("Generating Zarr v3 test fixtures...")
     generate_v3_simple_1d(base)
     generate_v3_chunked_2d(base)
