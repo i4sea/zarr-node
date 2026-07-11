@@ -1,6 +1,6 @@
-import { readFile, access, readdir, open as fsOpen } from "node:fs/promises";
+import { readFile, access, readdir, open as fsOpen, stat } from "node:fs/promises";
 import { join } from "node:path";
-import type { Store, FileSystemStoreOptions } from "./store.js";
+import type { Store, StoreHead, FileSystemStoreOptions } from "./store.js";
 
 export class FileSystemStore implements Store {
   private readonly root: string;
@@ -49,6 +49,16 @@ export class FileSystemStore implements Store {
     }
   }
 
+  async head(key: string): Promise<StoreHead | null> {
+    try {
+      const s = await stat(join(this.root, key));
+      return { etag: null, lastModified: s.mtime, size: s.size };
+    } catch (err) {
+      if (isNotFound(err)) return null;
+      throw err;
+    }
+  }
+
   async *list(prefix: string): AsyncIterable<string> {
     const dir = join(this.root, prefix);
     let entries: string[];
@@ -64,9 +74,9 @@ export class FileSystemStore implements Store {
 }
 
 function isNotFound(err: unknown): boolean {
-  return (
-    err instanceof Error &&
-    "code" in err &&
-    (err as NodeJS.ErrnoException).code === "ENOENT"
-  );
+  if (!(err instanceof Error) || !("code" in err)) return false;
+  const code = (err as NodeJS.ErrnoException).code;
+  // ENOTDIR: a path component is a file (e.g. probing "file.json/zarr.json"
+  // during node detection) — the key is just as absent as with ENOENT.
+  return code === "ENOENT" || code === "ENOTDIR";
 }

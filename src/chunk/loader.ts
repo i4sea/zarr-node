@@ -1,7 +1,9 @@
 import type { Store } from "../store/store.js";
-import type { Codec } from "../codec/codec.js";
+import type {
+  ChunkDecodeContext,
+  CodecPipeline,
+} from "../codec/pipeline.js";
 import type { DecodePool } from "../codec/decode-pool.js";
-import type { CompressorConfig } from "../metadata/types.js";
 import type { MemoryCache } from "../cache/memory.js";
 import type { ObservabilityHooks } from "../observability.js";
 import { safeInvoke } from "../observability.js";
@@ -40,13 +42,17 @@ export interface LoadChunksContext {
   /** Throw MissingChunkError on absent chunks instead of zero-filling. */
   strict?: boolean;
   /**
-   * Optional worker-thread pool. When present, offloadable chunks above the
-   * pool's threshold are decoded off the event loop. Requires `compressorConfig`
-   * (the worker reconstructs the codec from it).
+   * Optional worker-thread pool. When present, offloadable bytes→bytes stages
+   * above the pool's threshold are decoded off the event loop (the worker
+   * reconstructs the codec from the stage's config).
    */
   decodePool?: DecodePool | null;
-  /** Compressor config from `.zarray`; passed to the worker pool to rebuild the codec. */
-  compressorConfig?: CompressorConfig | null;
+  /**
+   * Per-chunk decode context handed to context-aware pipeline stages
+   * (v3 `transpose`/`bytes`). Optional — pass-through and plain bytes→bytes
+   * chains never consult it.
+   */
+  decodeContext?: ChunkDecodeContext;
 }
 
 /**
@@ -66,7 +72,7 @@ export interface LoadChunksContext {
  */
 export async function loadChunks(
   store: Store,
-  codec: Codec | null,
+  pipeline: CodecPipeline,
   tasks: ChunkTask[],
   ctx: LoadChunksContext,
   onChunk: (chunk: LoadedChunk) => void,
@@ -75,24 +81,20 @@ export async function loadChunks(
   const hooks = ctx.observability;
   const strict = ctx.strict === true;
   const decodePool = ctx.decodePool ?? null;
-  const compressorConfig = ctx.compressorConfig ?? null;
+  const offload = decodePool ? { pool: decodePool } : undefined;
 
-  // Decode a raw chunk: offload to a worker when the pool accepts this codec
-  // and the chunk is large enough; otherwise decode inline on the event loop.
+  // Decode a raw chunk through the pipeline (reverse stage order). The
+  // pipeline offloads heavy bytes→bytes stages to the pool when eligible;
+  // everything else decodes inline on the event loop.
   async function decodeRaw(raw: Uint8Array): Promise<Uint8Array> {
-    if (!codec) return raw;
-    if (
-      decodePool &&
-      compressorConfig &&
-      decodePool.shouldOffload(codec.id, raw.byteLength)
-    ) {
-      return decodePool.decode(compressorConfig, raw);
-    }
-    return codec.decode(raw);
+    return pipeline.decode(raw, ctx.decodeContext, offload);
   }
 
-  // Can we use byte-range requests? Only when uncompressed and store supports it.
-  const getRange = codec === null ? store.getRange?.bind(store) : undefined;
+  // Can we use byte-range requests? Only when the chain is a byte-identity
+  // (uncompressed) and the store supports it.
+  const getRange = pipeline.isPassthrough
+    ? store.getRange?.bind(store)
+    : undefined;
 
   // First failure aborts the read: the scheduler stops launching tasks, and
   // in-flight tasks short-circuit after their pending await instead of
@@ -169,7 +171,7 @@ export async function loadChunks(
         decoded = await decodeRaw(raw);
         safeInvoke(hooks.onChunkDecoded, {
           bytes: decoded.byteLength,
-          codec: codec ? codec.id : null,
+          codec: pipeline.compressorId,
           decodeMs: performance.now() - start,
         });
       } else {

@@ -42,9 +42,30 @@ export const codecRegistry: CodecRegistry = new CodecRegistryImpl();
 
 // Register built-in codecs (sync factories).
 import { GzipCodec } from "./gzip.js";
+import { BytesCodec } from "./bytes.js";
+import { TransposeCodec } from "./transpose.js";
+import { Crc32cCodec } from "./crc32c.js";
 
 codecRegistry.register("zlib", () => new GzipCodec("zlib"));
 codecRegistry.register("gzip", () => new GzipCodec("gzip"));
+// v3 codecs (feature 006):
+codecRegistry.register("bytes", (config) => new BytesCodec(config));
+codecRegistry.register("transpose", (config) => new TransposeCodec(config));
+codecRegistry.register("crc32c", () => new Crc32cCodec());
+// sharding_indexed is registered for discovery/parse (plugin surface), but it
+// executes as the store-aware sharding reader (src/codec/sharding.ts), never
+// through pipeline.decode() — see contracts/sharding.md "Where sharding lives".
+codecRegistry.register("sharding_indexed", (config) => ({
+  id: "sharding_indexed",
+  async decode(): Promise<Uint8Array> {
+    throw new CodecError(
+      "sharding_indexed cannot be decoded as a plain codec; sharded chunk " +
+        "reads are routed to the sharding reader by the read path",
+    );
+  },
+  // Referenced so the config isn't dropped by bundlers/linters.
+  config,
+}));
 
 // Lazy-load Blosc. `numcodecs` is ESM-only — its package.json `exports`
 // map has only an `"import"` condition. Two consequences for the CJS
@@ -65,6 +86,7 @@ codecRegistry.register("gzip", () => new GzipCodec("gzip"));
 // deps from a dual-published library.
 interface NumcodecsModule {
   Blosc: { fromConfig(config: CompressorConfig): Codec };
+  Zstd: { fromConfig(config: CompressorConfig): Codec };
 }
 let bloscModulePromise: Promise<NumcodecsModule> | null = null;
 function loadNumcodecs(): Promise<NumcodecsModule> {
@@ -78,6 +100,15 @@ if (!codecRegistry.has("blosc")) {
   codecRegistry.register("blosc", async (config) => {
     const { Blosc } = await loadNumcodecs();
     return Blosc.fromConfig(config);
+  });
+}
+// Standalone zstd — zarr-python's default v3 compressor writes plain zstd
+// frames (feature 006). Level/checksum config only affects encode; decode
+// handles both.
+if (!codecRegistry.has("zstd")) {
+  codecRegistry.register("zstd", async (config) => {
+    const { Zstd } = await loadNumcodecs();
+    return Zstd.fromConfig(config);
   });
 }
 // "raw" / null compressor is handled directly in the chunk loader, not via registry

@@ -20,11 +20,36 @@ export function computeChunkRanges(
   return ranges;
 }
 
+import type { ChunkKeyStrategy } from "../metadata/types.js";
+
 /**
  * Build the chunk key string from chunk indices and separator.
  */
 export function chunkKey(indices: number[], separator: "." | "/"): string {
   return indices.join(separator);
+}
+
+/**
+ * Build a store chunk key from a chunk coordinate and the array's
+ * `ChunkKeyStrategy`, folding in the node base path (FR-010).
+ *
+ * - v2: `indices.join(separator)` (e.g. `0.1` or `0/1`).
+ * - v3-default: `prefix + separator + indices.join(separator)` (e.g. `c/0/1`);
+ *   a zero-dimensional array uses just the prefix (`c`).
+ */
+export function encodeChunkKey(
+  indices: number[],
+  strategy: ChunkKeyStrategy,
+): string {
+  const joined = indices.join(strategy.separator);
+  let rel: string;
+  if (strategy.kind === "v3-default") {
+    const prefix = strategy.prefix ?? "c";
+    rel = indices.length > 0 ? `${prefix}${strategy.separator}${joined}` : prefix;
+  } else {
+    rel = joined;
+  }
+  return strategy.basePath ? `${strategy.basePath}/${rel}` : rel;
 }
 
 /**

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Zarr v3 read support (issue #15)** behind the unchanged public API: the same `open`/`openArray`/`openGroup` calls now read v3 stores (`zarr.json` single-document metadata, named data types, `c/…` chunk keys), with the format detected automatically — no version argument. When both formats' markers exist at one node (degenerate), `zarr.json` wins.
+  - **Data types**: `bool`, `int8/16/32/64`, `uint8/16/32/64`, `float16/32/64`. `float16` widens to `Float32Array` on decode; 64-bit ints surface as BigInt typed arrays. `array.dtype` reports the v3 name (e.g. `"float32"`) for v3 arrays and the numpy typestr (e.g. `"<f4"`) for v2 — unchanged.
+  - **Ordered codec chains** decoded in reverse declaration order: `transpose` (inverse axis permutation), `bytes` (endianness), `blosc`/`gzip`/`zlib`/standalone `zstd`, and `crc32c` (checksum verified on decode; a mismatch throws a `CodecError` rather than returning corrupt data).
+  - **Sharding (`sharding_indexed`)**: sub-region reads fetch only the touched inner-chunk byte-ranges on `getRange`-capable stores — the shard index is itself range-read (decoded through its `index_codecs`, crc32c verified) and adjacent inner-chunk ranges are coalesced under a configurable gap threshold (`ReadOptions.shardRangeGapBytes`, default ~1 MiB; exactly-contiguous ranges always merge). Stores without `getRange` fall back to one whole-shard fetch per touched shard. Empty-marked inner chunks resolve to the fill value with no read issued.
+  - **v3 consolidated metadata**: a root `zarr.json` with a nested `consolidated_metadata` block resolves children with zero per-node metadata fetches, matching the v2 `.zmetadata` behavior.
+  - **`FileSystemStore.head()`** (stat-based), enabling ranged reads of end-located shard indexes on the filesystem backend.
+- **v2 `filters` are now applied on decode (FR-009).** Previously parsed but silently ignored. Arrays declaring a filter whose id has no registered codec now fail loudly at open instead of silently decoding wrong bytes; existing `filters: null` arrays are unaffected.
+
+### Changed
+
+- Internal: the read path is format-neutral — both parsers resolve into shared `ResolvedArrayMeta`/`CodecPipeline` types, and metadata probing/key construction is centralized in a `layout` module. Public API signatures, v2 behavior, and the plugin `codecRegistry` surface are unchanged; all pre-existing v2 fixtures and tests pass as-is.
+
 ## [0.8.0] — 2026-07-04
 
 ### Fixed

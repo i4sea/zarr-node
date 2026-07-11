@@ -13,4 +13,10 @@ declare module "numcodecs" {
       decode(data: Uint8Array): Promise<Uint8Array>;
     };
   };
+  export const Zstd: {
+    fromConfig(config: { id: string; [key: string]: unknown }): {
+      id: string;
+      decode(data: Uint8Array): Promise<Uint8Array>;
+    };
+  };
 }

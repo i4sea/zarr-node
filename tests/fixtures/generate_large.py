@@ -38,9 +38,37 @@ def generate_large_1gb(base: str) -> None:
     print(f"  large_1gb: shape={shape}, size~={shape[0]*shape[1]*8 / 1e9:.1f}GB")
 
 
+def generate_v3_large_100mb(base: str) -> None:
+    """~100MB v3 float32 array (non-sharded), mirror of large_100mb."""
+    path = os.path.join(base, "v3_large_100mb")
+    shape = (5000, 5000)
+    data = np.random.RandomState(42).standard_normal(shape).astype("<f4")
+    z = zarr.create_array(store=path, shape=shape, dtype="<f4",
+                          chunks=(500, 500), compressors=None,
+                          zarr_format=3, overwrite=True)
+    z[:] = data
+    print(f"  v3_large_100mb: shape={shape}, size={data.nbytes / 1e6:.0f}MB")
+
+
+def generate_v3_sharded_large(base: str) -> None:
+    """~100MB v3 sharded array: 1000x1000 shards packing 250x250 inner chunks
+    (uncompressed inner chain, so transferred-bytes accounting is exact)."""
+    path = os.path.join(base, "v3_sharded_large")
+    shape = (5000, 5000)
+    data = np.random.RandomState(7).standard_normal(shape).astype("<f4")
+    z = zarr.create_array(store=path, shape=shape, dtype="<f4",
+                          chunks=(250, 250), shards=(1000, 1000),
+                          compressors=None, zarr_format=3, overwrite=True)
+    z[:] = data
+    print(f"  v3_sharded_large: shape={shape}, shards=(1000,1000), "
+          f"inner=(250,250), size={data.nbytes / 1e6:.0f}MB")
+
+
 if __name__ == "__main__":
     base = os.path.dirname(os.path.abspath(__file__))
     print("Generating large fixtures...")
     generate_large_100mb(base)
     generate_large_1gb(base)
+    generate_v3_large_100mb(base)
+    generate_v3_sharded_large(base)
     print("Done.")

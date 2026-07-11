@@ -12,4 +12,5 @@ Thumbs.db
 .venv/
 tests/fixtures/large_100mb/
 tests/fixtures/large_1gb/
-.bench/
+.bench/tests/fixtures/v3_large_100mb/
+tests/fixtures/v3_sharded_large/

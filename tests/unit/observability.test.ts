@@ -12,6 +12,7 @@ import { ByteLimiter } from "../../src/chunk/limiter.js";
 import { loadChunks } from "../../src/chunk/loader.js";
 import type { LoadedChunk } from "../../src/chunk/loader.js";
 import { GzipCodec } from "../../src/codec/gzip.js";
+import { CodecPipeline, buildV2Pipeline } from "../../src/codec/pipeline.js";
 import type { Store } from "../../src/store/store.js";
 
 describe("safeInvoke", () => {
@@ -181,9 +182,12 @@ describe("loader memory-tier hooks", () => {
     hooks: ObservabilityHooks,
   ): Promise<LoadedChunk[]> {
     const chunks: LoadedChunk[] = [];
+    const pipeline = codec
+      ? await buildV2Pipeline({ id: codec.id }, null)
+      : CodecPipeline.passthrough();
     await loadChunks(
       store,
-      codec,
+      pipeline,
       [{ key: "0.0", chunkCoord: [0, 0] }],
       {
         concurrency: 2,

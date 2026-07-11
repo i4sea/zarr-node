@@ -38,7 +38,22 @@ export type {
   ZarrayMeta,
   ZgroupMeta,
   Zattrs,
+  // Version-neutral resolved metadata (feature 006) — the types the
+  // ZarrArray/ZarrGroup constructors consume; produced by open()/openArray().
+  ResolvedArrayMeta,
+  ResolvedGroupMeta,
+  ResolvedDtype,
+  ChunkKeyStrategy,
+  ShardingInfo,
+  ByteOrder,
 } from "./metadata/types.js";
+export { CodecPipeline, buildV2Pipeline } from "./codec/pipeline.js";
+export type {
+  CodecKind,
+  ChunkDecodeContext,
+  PipelineCodec,
+  PipelineStage,
+} from "./codec/pipeline.js";
 export {
   ZarrError,
   MetadataError,

@@ -99,8 +99,14 @@ function createFixtureServer(): Promise<{ server: Server; url: string }> {
         try {
           await access(filePath);
           const data = await readFile(filePath);
-          res.writeHead(200);
-          res.end(data);
+          // Set Content-Length so HEAD probes can surface the object size.
+          res.writeHead(200, {
+            "Content-Length": String(data.byteLength),
+            "Last-Modified": "Wed, 09 Jul 2026 00:00:00 GMT",
+            ETag: '"fixture-etag"',
+          });
+          // Node suppresses the body for HEAD responses automatically.
+          res.end(req.method === "HEAD" ? undefined : data);
         } catch {
           res.writeHead(404);
           res.end("Not Found");
@@ -163,6 +169,23 @@ describe("HTTPStore — basic operations", () => {
     await expect(iter[Symbol.asyncIterator]().next()).rejects.toThrow(
       "does not support",
     );
+  });
+
+  it("head() returns the object size from Content-Length", async () => {
+    const store = new HTTPStore({ url: baseUrl });
+    const expected = await readFile(
+      join(FIXTURES, "v3_simple_1d", "zarr.json"),
+    );
+    const head = await store.head("v3_simple_1d/zarr.json");
+    expect(head).not.toBeNull();
+    expect(head?.size).toBe(expected.byteLength);
+    expect(head?.etag).toBe('"fixture-etag"');
+    expect(head?.lastModified).toBeInstanceOf(Date);
+  });
+
+  it("head() returns null for a missing key (404)", async () => {
+    const store = new HTTPStore({ url: baseUrl });
+    expect(await store.head("does/not/exist.json")).toBeNull();
   });
 });
 

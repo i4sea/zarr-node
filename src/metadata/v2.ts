@@ -1,5 +1,18 @@
 import { MetadataError } from "../errors.js";
-import type { ZarrayMeta, ZgroupMeta, Zattrs } from "./types.js";
+import {
+  dtypeToTypedArrayCtor,
+  dtypeByteSize,
+  isBigEndian,
+} from "../dtype.js";
+import type { CodecPipeline } from "../codec/pipeline.js";
+import type {
+  ZarrayMeta,
+  ZgroupMeta,
+  Zattrs,
+  ResolvedArrayMeta,
+  ResolvedGroupMeta,
+  ResolvedDtype,
+} from "./types.js";
 
 export function parseZarrayMeta(raw: string): ZarrayMeta {
   let parsed: Record<string, unknown>;
@@ -88,4 +101,62 @@ export function parseZattrs(raw: string): Zattrs {
   } catch {
     throw new MetadataError("Invalid .zattrs JSON: failed to parse");
   }
+}
+
+// --- v2 → version-neutral adapters (feature 006) ---
+
+/** Resolve a v2 numpy typestr into the neutral dtype description. */
+export function resolveV2Dtype(dtype: string): ResolvedDtype {
+  const byteSize = dtypeByteSize(dtype);
+  return {
+    ctor: dtypeToTypedArrayCtor(dtype),
+    byteSize,
+    byteOrder: byteSize === 1 ? "none" : isBigEndian(dtype) ? "big" : "little",
+    widenHalfToFloat: false,
+  };
+}
+
+/** Interpret a v2 `fill_value` (incl. the JSON string forms of specials). */
+export function resolveV2FillValue(
+  fillValue: ZarrayMeta["fill_value"],
+): number | null {
+  if (fillValue === null) return null;
+  if (fillValue === "NaN") return NaN;
+  if (fillValue === "Infinity") return Infinity;
+  if (fillValue === "-Infinity") return -Infinity;
+  return typeof fillValue === "number" ? fillValue : null;
+}
+
+/** Convert a parsed `.zarray` into the version-neutral array description. */
+export function toResolvedArrayMeta(
+  meta: ZarrayMeta,
+  attrs: Zattrs,
+  basePath: string,
+  codecPipeline: CodecPipeline,
+): ResolvedArrayMeta {
+  return {
+    zarrFormat: 2,
+    shape: meta.shape,
+    chunkShape: meta.chunks,
+    dtypeName: meta.dtype,
+    dtype: resolveV2Dtype(meta.dtype),
+    codecPipeline,
+    fillValue: resolveV2FillValue(meta.fill_value),
+    order: meta.order,
+    chunkKey: {
+      kind: "v2",
+      separator: meta.dimension_separator,
+      prefix: null,
+      basePath: basePath || null,
+    },
+    attrs,
+  };
+}
+
+/** Convert a parsed `.zgroup` into the version-neutral group description. */
+export function toResolvedGroupMeta(
+  _meta: ZgroupMeta,
+  attrs: Zattrs,
+): ResolvedGroupMeta {
+  return { zarrFormat: 2, attrs };
 }

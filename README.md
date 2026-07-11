@@ -3,18 +3,25 @@
 [![CI](https://github.com/i4sea/zarr-node/actions/workflows/ci.yml/badge.svg)](https://github.com/i4sea/zarr-node/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Read-only Zarr v2 array reader for Node.js. Server-first, with FileSystem, HTTP, and S3 backends.
+Read-only Zarr v2 **and v3** array reader for Node.js. Server-first, with FileSystem, HTTP, and S3 backends.
 
 ## Features
 
-- **Zarr v2** chunked array reader with full dtype support
+- **Zarr v2 and v3** chunked array reader with full dtype support — the format
+  (`.zarray`/`.zgroup` vs `zarr.json`) is detected automatically; no version
+  argument, no API difference
+- **v3 codec chains** (`transpose → bytes → blosc/gzip/zstd`, `crc32c`
+  checksum verification) decoded in reverse declaration order
+- **v3 sharding** (`sharding_indexed`): sub-region reads fetch only the
+  touched inner-chunk byte-ranges (coalesced, ~1 MiB gap threshold) with a
+  whole-shard fallback on stores without ranged reads
 - **Three storage backends**: FileSystem, HTTP (with retry/timeout), S3
-- **Consolidated metadata** (`.zmetadata`) for fast group discovery
+- **Consolidated metadata** (v2 `.zmetadata`, v3 nested `consolidated_metadata`) for fast group discovery
 - **Disk cache** with thundering herd protection and LRU eviction
 - **In-memory LRU cache** for sub-millisecond repeated reads
 - **Shared metadata cache** — pluggable `Cache` interface with in-memory and Redis adapters
 - **Observability hooks** — per-instance callbacks for cache hits/misses, store fetches, retries, decodes, in-flight bytes, and missing chunks
-- **Built-in Blosc codec** (lz4, zstd, zlib, snappy) — zero configuration
+- **Built-in Blosc codec** (lz4, zstd, zlib, snappy) and standalone zstd — zero configuration
 - **Byte-range requests** for partial chunk fetches on uncompressed data
 - **Bounded memory** — reads cap decoded bytes in flight, not just chunk count
 - **Multi-array reads** sharing one in-flight memory budget
@@ -57,6 +64,26 @@ const data = await array.read();
 const slice = await array.read([
   [0, 10],
   [5, 15],
+]);
+```
+
+### Zarr v3 — same calls, no version argument
+
+The same `open`/`openArray`/`openGroup` calls read v3 stores (`zarr.json` +
+`c/…` chunk keys); the format is detected automatically. `array.dtype`
+surfaces the format's own spelling: a v2 array reports the numpy typestr
+(`"<f4"`), a v3 array the v3 name (`"float32"`). v3 `float16` data widens to
+`Float32Array`; `int64`/`uint64` come back as BigInt typed arrays.
+
+```typescript
+const v3 = await openArray(new FileSystemStore({ path: "/path/to/v3.zarr" }));
+console.log(v3.dtype); // "float32"
+
+// Sharded v3 data reads sub-regions by inner-chunk byte-ranges — zero
+// whole-shard downloads on getRange-capable stores (FS/HTTP/S3):
+const window = await v3.get([
+  [500, 520],
+  [500, 520],
 ]);
 ```
 

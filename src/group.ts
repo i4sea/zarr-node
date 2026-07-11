@@ -1,5 +1,5 @@
 import type { Store } from "./store/store.js";
-import type { Zattrs } from "./metadata/types.js";
+import type { Zattrs, ResolvedGroupMeta } from "./metadata/types.js";
 import type { TypedArray } from "./dtype.js";
 import type { ConsolidatedMetadata } from "./metadata/consolidated.js";
 import { ZarrArray, DEFAULT_MAX_IN_FLIGHT_BYTES } from "./array.js";
@@ -9,65 +9,188 @@ import {
   parseZarrayMeta,
   parseZgroupMeta,
   parseZattrs,
+  toResolvedArrayMeta,
+  toResolvedGroupMeta,
 } from "./metadata/v2.js";
+import { parseV3ArrayMeta, parseV3GroupMeta } from "./metadata/v3.js";
+import {
+  detectNode,
+  metadataKey,
+  V2_ATTRS_META,
+} from "./metadata/layout.js";
+import type { DetectedNode, MetaReader } from "./metadata/layout.js";
 import { MetadataError } from "./errors.js";
-import { codecRegistry } from "./codec/codec.js";
+import { buildV2Pipeline } from "./codec/pipeline.js";
 import type { MetadataCacheContext } from "./cache/read-through.js";
 import { readMetadataThrough } from "./cache/read-through.js";
+
+/** Load a node's user attributes (v2: sibling `.zattrs`; absent ⇒ `{}`). */
+async function loadV2Attrs(
+  read: MetaReader,
+  basePath: string,
+): Promise<Zattrs> {
+  const raw = await read(metadataKey(basePath, V2_ATTRS_META));
+  return raw ? parseZattrs(new TextDecoder().decode(raw)) : {};
+}
+
+/**
+ * @internal Materialize a detected ARRAY node into a `ZarrArray`.
+ * Shared by `open.ts` and `ZarrGroup` child access.
+ */
+export async function materializeArrayNode(
+  store: Store,
+  node: DetectedNode,
+  basePath: string,
+  read: MetaReader,
+): Promise<ZarrArray> {
+  if (node.format === 3) {
+    // v3: everything (attrs, codecs, keys) lives in the single zarr.json.
+    return new ZarrArray(store, await parseV3ArrayMeta(node.raw, basePath));
+  }
+  const meta = parseZarrayMeta(new TextDecoder().decode(node.raw));
+  const attrs = await loadV2Attrs(read, basePath);
+  const pipeline = await buildV2Pipeline(meta.compressor, meta.filters);
+  return new ZarrArray(
+    store,
+    toResolvedArrayMeta(meta, attrs, basePath, pipeline),
+  );
+}
+
+/**
+ * @internal Materialize a detected GROUP node into its neutral metadata.
+ * The caller builds the `ZarrGroup` (root opens also wire consolidated
+ * metadata).
+ */
+export async function materializeGroupMeta(
+  node: DetectedNode,
+  basePath: string,
+  read: MetaReader,
+): Promise<ResolvedGroupMeta> {
+  if (node.format === 3) {
+    return parseV3GroupMeta(node.raw);
+  }
+  const meta = parseZgroupMeta(new TextDecoder().decode(node.raw));
+  const attrs = await loadV2Attrs(read, basePath);
+  return toResolvedGroupMeta(meta, attrs);
+}
 
 export class ZarrGroup {
   readonly attrs: Readonly<Record<string, unknown>>;
 
   private readonly store: Store;
+  private readonly meta: ResolvedGroupMeta;
   private readonly basePath: string;
   private readonly consolidatedMeta: ConsolidatedMetadata | null;
   private readonly metaContext?: MetadataCacheContext;
 
   constructor(
     store: Store,
-    attrs: Zattrs,
+    meta: ResolvedGroupMeta,
     basePath: string,
     consolidatedMeta: ConsolidatedMetadata | null = null,
     metaContext?: MetadataCacheContext,
   ) {
     this.store = store;
-    this.attrs = attrs;
+    this.meta = meta;
+    this.attrs = meta.attrs;
     this.basePath = basePath;
     this.consolidatedMeta = consolidatedMeta;
     this.metaContext = metaContext;
   }
 
+  /**
+   * Detect a child node through the layout seam. Children are probed in this
+   * group's own format order first (a v2 group's children are v2 in practice),
+   * keeping the v2 request pattern unchanged.
+   *
+   * With consolidated metadata, detection probes run against the consolidated
+   * map ONLY (a miss there costs no store round-trip); if the node is entirely
+   * absent from it, detection retries against the store — consolidated
+   * metadata may be incomplete (FR-005).
+   */
+  private async detectChild(path: string): Promise<DetectedNode> {
+    const opts = { preferFormat: this.meta.zarrFormat };
+    if (this.consolidatedMeta) {
+      const consolidated = this.consolidatedMeta;
+      try {
+        return await detectNode(
+          async (key: string) => consolidated.get(key),
+          path,
+          opts,
+        );
+      } catch (err) {
+        if (!(err instanceof MetadataError)) throw err;
+        // Fall through: not in consolidated metadata — probe the store.
+      }
+    }
+    return detectNode(this.metaReader, path, opts);
+  }
+
+  private get metaReader(): MetaReader {
+    return (key: string) => this.getMeta(key);
+  }
+
   async getArray(name: string): Promise<ZarrArray> {
     const path = this.childPath(name);
-    const zarrayKey = `${path}/.zarray`;
-    const raw = await this.getMeta(zarrayKey);
-    if (!raw) {
+    let node: DetectedNode;
+    try {
+      node = await this.detectChild(path);
+    } catch (err) {
+      if (err instanceof MetadataError) {
+        throw new MetadataError(
+          `No array metadata found for "${name}" at path "${path}"`,
+        );
+      }
+      throw err;
+    }
+    return this.arrayFromNode(node, name, path);
+  }
+
+  /** Materialize an already-detected child node into a `ZarrArray`. */
+  private arrayFromNode(
+    node: DetectedNode,
+    name: string,
+    path: string,
+  ): Promise<ZarrArray> {
+    if (node.nodeType !== "array") {
       throw new MetadataError(
-        `No .zarray metadata found for "${name}" at path "${path}"`,
+        `Node "${name}" at path "${path}" is a group, not an array`,
       );
     }
-    const meta = parseZarrayMeta(new TextDecoder().decode(raw));
-    const attrs = await this.loadAttrs(path);
-    const codec = meta.compressor
-      ? await codecRegistry.get(meta.compressor)
-      : null;
-    return new ZarrArray(this.store, meta, attrs, path, codec);
+    return materializeArrayNode(this.store, node, path, this.metaReader);
   }
 
   async getGroup(name: string): Promise<ZarrGroup> {
     const path = this.childPath(name);
-    const zgroupKey = `${path}/.zgroup`;
-    const raw = await this.getMeta(zgroupKey);
-    if (!raw) {
+    let node: DetectedNode;
+    try {
+      node = await this.detectChild(path);
+    } catch (err) {
+      if (err instanceof MetadataError) {
+        throw new MetadataError(
+          `No group metadata found for "${name}" at path "${path}"`,
+        );
+      }
+      throw err;
+    }
+    return this.groupFromNode(node, name, path);
+  }
+
+  /** Materialize an already-detected child node into a `ZarrGroup`. */
+  private async groupFromNode(
+    node: DetectedNode,
+    name: string,
+    path: string,
+  ): Promise<ZarrGroup> {
+    if (node.nodeType !== "group") {
       throw new MetadataError(
-        `No .zgroup metadata found for "${name}" at path "${path}"`,
+        `Node "${name}" at path "${path}" is an array, not a group`,
       );
     }
-    parseZgroupMeta(new TextDecoder().decode(raw));
-    const attrs = await this.loadAttrs(path);
+    const meta = await materializeGroupMeta(node, path, this.metaReader);
     return new ZarrGroup(
       this.store,
-      attrs,
+      meta,
       path,
       this.consolidatedMeta,
       this.metaContext,
@@ -76,18 +199,20 @@ export class ZarrGroup {
 
   async *arrays(): AsyncIterable<[string, ZarrArray]> {
     for (const name of await this.discoverChildren()) {
-      const zarrayKey = this.childPath(name) + "/.zarray";
-      if (await this.hasMeta(zarrayKey)) {
-        yield [name, await this.getArray(name)];
+      const node = await this.tryDetectChild(name);
+      if (node?.nodeType === "array") {
+        // Reuse the node from detection — no second probe (see getArray).
+        yield [name, await this.arrayFromNode(node, name, this.childPath(name))];
       }
     }
   }
 
   async *groups(): AsyncIterable<[string, ZarrGroup]> {
     for (const name of await this.discoverChildren()) {
-      const zgroupKey = this.childPath(name) + "/.zgroup";
-      if (await this.hasMeta(zgroupKey)) {
-        yield [name, await this.getGroup(name)];
+      const node = await this.tryDetectChild(name);
+      if (node?.nodeType === "group") {
+        // Reuse the node from detection — no second probe (see getGroup).
+        yield [name, await this.groupFromNode(node, name, this.childPath(name))];
       }
     }
   }
@@ -152,10 +277,17 @@ export class ZarrGroup {
   }
 
   async contains(name: string): Promise<boolean> {
-    const path = this.childPath(name);
-    const hasArray = await this.hasMeta(`${path}/.zarray`);
-    const hasGroup = await this.hasMeta(`${path}/.zgroup`);
-    return hasArray || hasGroup;
+    return (await this.tryDetectChild(name)) !== null;
+  }
+
+  /** detectChild that resolves null for non-node children instead of throwing. */
+  private async tryDetectChild(name: string): Promise<DetectedNode | null> {
+    try {
+      return await this.detectChild(this.childPath(name));
+    } catch (err) {
+      if (err instanceof MetadataError) return null;
+      throw err;
+    }
   }
 
   /**
@@ -193,30 +325,7 @@ export class ZarrGroup {
     return readMetadataThrough(this.store, key, this.metaContext);
   }
 
-  /**
-   * Check if metadata key exists. Checks consolidated cache first. With a
-   * shared metadata cache, existence is answered through the same
-   * read-through as getMeta — keeping both coherent (including negative
-   * entries) and avoiding store round-trips once the cache is warm.
-   */
-  private async hasMeta(key: string): Promise<boolean> {
-    if (this.consolidatedMeta && this.consolidatedMeta.has(key)) {
-      return true;
-    }
-    if (this.metaContext) {
-      const raw = await readMetadataThrough(this.store, key, this.metaContext);
-      return raw !== null;
-    }
-    return this.store.has(key);
-  }
-
   private childPath(name: string): string {
     return this.basePath ? `${this.basePath}/${name}` : name;
-  }
-
-  private async loadAttrs(path: string): Promise<Zattrs> {
-    const zattrsKey = `${path}/.zattrs`;
-    const raw = await this.getMeta(zattrsKey);
-    return raw ? parseZattrs(new TextDecoder().decode(raw)) : {};
   }
 }

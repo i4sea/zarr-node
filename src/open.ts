@@ -1,16 +1,16 @@
 import type { Store } from "./store/store.js";
 import { ZarrArray } from "./array.js";
-import { ZarrGroup } from "./group.js";
-import type { Zattrs } from "./metadata/types.js";
+import {
+  ZarrGroup,
+  materializeArrayNode,
+  materializeGroupMeta,
+} from "./group.js";
 import type { ConsolidatedMetadata } from "./metadata/consolidated.js";
 import { parseConsolidatedMetadata } from "./metadata/consolidated.js";
-import {
-  parseZarrayMeta,
-  parseZgroupMeta,
-  parseZattrs,
-} from "./metadata/v2.js";
+import { parseV3ConsolidatedMetadata } from "./metadata/consolidated-v3.js";
+import { detectNode } from "./metadata/layout.js";
+import type { DetectedNode, MetaReader } from "./metadata/layout.js";
 import { MetadataError, StoreError } from "./errors.js";
-import { codecRegistry } from "./codec/codec.js";
 import type { Cache } from "./cache/cache.js";
 import type { MetadataCacheContext } from "./cache/read-through.js";
 import { readMetadataThrough } from "./cache/read-through.js";
@@ -63,9 +63,16 @@ function resolveMetaContext(
   };
 }
 
+/** Bind the store + cache context into the layout's metadata reader. */
+function metaReader(store: Store, ctx?: MetadataCacheContext): MetaReader {
+  return (key: string) => readMetadataThrough(store, key, ctx);
+}
+
 /**
- * Open a Zarr v2 store path and return the appropriate object.
- * Returns ZarrArray if the path contains .zarray, ZarrGroup if .zgroup.
+ * Open a Zarr store path and return the appropriate object — a `ZarrArray`
+ * for array nodes, a `ZarrGroup` for group nodes. The format (v2 `.zarray`/
+ * `.zgroup` vs v3 `zarr.json`) is detected automatically (FR-001); no version
+ * argument exists.
  */
 export async function open(
   store: Store,
@@ -74,30 +81,17 @@ export async function open(
 ): Promise<ZarrArray | ZarrGroup> {
   const ctx = resolveMetaContext(store, options);
   const basePath = normalizePath(path ?? "");
+  const read = metaReader(store, ctx);
+  const node = await detectNode(read, basePath);
 
-  // Check for .zarray
-  const zarrayKey = basePath ? `${basePath}/.zarray` : ".zarray";
-  const zarrayRaw = await readMetadataThrough(store, zarrayKey, ctx);
-
-  if (zarrayRaw) {
-    return openArrayFromMeta(store, basePath, zarrayRaw, ctx);
+  if (node.nodeType === "array") {
+    return materializeArrayNode(store, node, basePath, read);
   }
-
-  // Check for .zgroup
-  const zgroupKey = basePath ? `${basePath}/.zgroup` : ".zgroup";
-  const zgroupRaw = await readMetadataThrough(store, zgroupKey, ctx);
-
-  if (zgroupRaw) {
-    return openGroupFromMeta(store, basePath, zgroupRaw, ctx);
-  }
-
-  throw new MetadataError(
-    `No .zarray or .zgroup metadata found at path "${basePath || "/"}"`,
-  );
+  return openGroupFromNode(store, node, basePath, read, ctx);
 }
 
 /**
- * Open a Zarr v2 group directly. Throws if path is not a group.
+ * Open a group directly. Throws if the path is not a group.
  */
 export async function openGroup(
   store: Store,
@@ -106,20 +100,28 @@ export async function openGroup(
 ): Promise<ZarrGroup> {
   const ctx = resolveMetaContext(store, options);
   const basePath = normalizePath(path ?? "");
-  const zgroupKey = basePath ? `${basePath}/.zgroup` : ".zgroup";
-  const zgroupRaw = await readMetadataThrough(store, zgroupKey, ctx);
-
-  if (!zgroupRaw) {
+  const read = metaReader(store, ctx);
+  let node: DetectedNode;
+  try {
+    node = await detectNode(read, basePath);
+  } catch (err) {
+    if (err instanceof MetadataError) {
+      throw new MetadataError(
+        `No group metadata found at path "${basePath || "/"}"`,
+      );
+    }
+    throw err;
+  }
+  if (node.nodeType !== "group") {
     throw new MetadataError(
-      `No .zgroup metadata found at path "${basePath || "/"}"`,
+      `Node at path "${basePath || "/"}" is an array, not a group`,
     );
   }
-
-  return openGroupFromMeta(store, basePath, zgroupRaw, ctx);
+  return openGroupFromNode(store, node, basePath, read, ctx);
 }
 
 /**
- * Open a Zarr v2 array directly. Throws if path is not an array.
+ * Open an array directly. Throws if the path is not an array.
  */
 export async function openArray(
   store: Store,
@@ -128,78 +130,64 @@ export async function openArray(
 ): Promise<ZarrArray> {
   const ctx = resolveMetaContext(store, options);
   const basePath = normalizePath(path ?? "");
-  const zarrayKey = basePath ? `${basePath}/.zarray` : ".zarray";
-  const zarrayRaw = await readMetadataThrough(store, zarrayKey, ctx);
-
-  if (!zarrayRaw) {
+  const read = metaReader(store, ctx);
+  let node: DetectedNode;
+  try {
+    node = await detectNode(read, basePath);
+  } catch (err) {
+    if (err instanceof MetadataError) {
+      throw new MetadataError(
+        `No array metadata found at path "${basePath || "/"}"`,
+      );
+    }
+    throw err;
+  }
+  if (node.nodeType !== "array") {
     throw new MetadataError(
-      `No .zarray metadata found at path "${basePath || "/"}"`,
+      `Node at path "${basePath || "/"}" is a group, not an array`,
     );
   }
-
-  return openArrayFromMeta(store, basePath, zarrayRaw, ctx);
+  return materializeArrayNode(store, node, basePath, read);
 }
 
-async function openArrayFromMeta(
+async function openGroupFromNode(
   store: Store,
+  node: DetectedNode,
   basePath: string,
-  zarrayRaw: Uint8Array,
-  ctx?: MetadataCacheContext,
-): Promise<ZarrArray> {
-  const meta = parseZarrayMeta(new TextDecoder().decode(zarrayRaw));
-
-  // Load .zattrs if present
-  const zattrsKey = basePath ? `${basePath}/.zattrs` : ".zattrs";
-  const zattrsRaw = await readMetadataThrough(store, zattrsKey, ctx);
-  const attrs: Zattrs = zattrsRaw
-    ? parseZattrs(new TextDecoder().decode(zattrsRaw))
-    : {};
-
-  const codec = meta.compressor
-    ? await codecRegistry.get(meta.compressor)
-    : null;
-
-  return new ZarrArray(store, meta, attrs, basePath, codec);
-}
-
-async function openGroupFromMeta(
-  store: Store,
-  basePath: string,
-  zgroupRaw: Uint8Array,
+  read: MetaReader,
   ctx?: MetadataCacheContext,
 ): Promise<ZarrGroup> {
-  parseZgroupMeta(new TextDecoder().decode(zgroupRaw));
+  // Load consolidated metadata if available (FR-001, FR-007, FR-016) — the
+  // group's own attrs are then served from it instead of a store round-trip.
+  const consolidated = await loadConsolidatedMetadata(store, node, basePath, ctx);
+  const readMeta: MetaReader = consolidated
+    ? async (key) => consolidated.get(key) ?? read(key)
+    : read;
 
-  // Load consolidated metadata if available (FR-001, FR-007)
-  const consolidated = await loadConsolidatedMetadata(store, basePath, ctx);
+  const meta = await materializeGroupMeta(node, basePath, readMeta);
 
-  // Load attrs — use consolidated cache if available
-  let attrs: Zattrs = {};
-  const zattrsKey = basePath ? `${basePath}/.zattrs` : ".zattrs";
-  if (consolidated) {
-    const cached = consolidated.get(zattrsKey);
-    if (cached) {
-      attrs = parseZattrs(new TextDecoder().decode(cached));
-    }
-  } else {
-    const zattrsRaw = await readMetadataThrough(store, zattrsKey, ctx);
-    attrs = zattrsRaw ? parseZattrs(new TextDecoder().decode(zattrsRaw)) : {};
-  }
-
-  return new ZarrGroup(store, attrs, basePath, consolidated, ctx);
+  return new ZarrGroup(store, meta, basePath, consolidated, ctx);
 }
 
 /**
- * Attempt to load .zmetadata from the store root.
- * Returns null if not found (transparent fallback per FR-004).
+ * Load consolidated metadata for a root group (root-only, matching the v2
+ * behavior). v2: a sibling `.zmetadata` document. v3: the nested
+ * `consolidated_metadata` block embedded in the root `zarr.json` itself —
+ * already fetched during detection, so no extra round-trip (FR-016).
+ * Returns null when absent (transparent fallback per FR-004).
  */
 async function loadConsolidatedMetadata(
   store: Store,
+  node: DetectedNode,
   basePath: string,
   ctx?: MetadataCacheContext,
 ): Promise<ConsolidatedMetadata | null> {
-  // .zmetadata is always at store root, not at sub-group paths
+  // Consolidated metadata is always at the store root, not sub-group paths
   if (basePath) return null;
+
+  if (node.format === 3) {
+    return parseV3ConsolidatedMetadata(node.raw);
+  }
 
   const raw = await readMetadataThrough(store, ".zmetadata", ctx);
   if (!raw) return null;

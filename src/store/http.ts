@@ -7,7 +7,7 @@ import {
   RetryExhaustedError,
   executeWithRetry,
 } from "./retry.js";
-import type { Store, HTTPStoreOptions } from "./store.js";
+import type { Store, StoreHead, HTTPStoreOptions } from "./store.js";
 
 /**
  * Sentinel thrown inside the retry loop so a retryable status goes through
@@ -72,6 +72,33 @@ export class HTTPStore implements Store {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * HEAD probe: surfaces `Content-Length` as the object size so end-located
+   * sharded reads can range-read the shard index instead of fetching the whole
+   * shard (feature 006). `null` strictly means the key is absent (404).
+   */
+  async head(key: string): Promise<StoreHead | null> {
+    const url = `${this.baseUrl}/${key}`;
+    const response = await this.fetchWithRetry(url, "HEAD");
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      throw new StoreError(
+        `HTTP HEAD ${url} failed with status ${response.status}: ${response.statusText}`,
+      );
+    }
+    const contentLength = response.headers.get("content-length");
+    const size =
+      contentLength !== null && /^\d+$/.test(contentLength)
+        ? Number(contentLength)
+        : null;
+    const lastModified = response.headers.get("last-modified");
+    return {
+      etag: response.headers.get("etag"),
+      lastModified: lastModified !== null ? new Date(lastModified) : null,
+      size,
+    };
   }
 
   async getRange(
