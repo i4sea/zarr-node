@@ -151,8 +151,17 @@ function fillFromHex(
       return view.getBigInt64(0, true);
     case "uint64":
       return view.getBigUint64(0, true);
+    // Signed integers: reinterpret the low bytes as two's complement so a
+    // bit-pattern like "0xff" for int8 resolves to -1, not 255.
+    case "int8":
+      return view.getInt8(0);
+    case "int16":
+      return view.getInt16(0, true);
+    case "int32":
+      return view.getInt32(0, true);
     default: {
-      // Integer/bool types: the bit pattern IS the value (masked to size).
+      // Unsigned integer / bool types: the bit pattern IS the value (masked
+      // to the stored size).
       const masked = bits & ((1n << BigInt(dtype.byteSize * 8)) - 1n);
       return Number(masked);
     }

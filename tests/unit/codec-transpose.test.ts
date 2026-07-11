@@ -80,4 +80,47 @@ describe("transpose codec (FR-008)", () => {
       CodecError,
     );
   });
+
+  it("decodes 4-byte data from a misaligned input buffer", async () => {
+    // Simulate an upstream stage handing us a view at a non-4-aligned
+    // byteOffset (e.g. a pooled Buffer or an odd-offset subarray): a naked
+    // `new Uint32Array(buf, offset)` would throw RangeError.
+    const codec = new TransposeCodec({ id: "transpose", order: [1, 0] });
+    const payload = i32(1, 4, 2, 5, 3, 6); // 24 bytes
+    const padded = new Uint8Array(payload.byteLength + 1);
+    padded.set(payload, 1);
+    const misaligned = padded.subarray(1); // byteOffset === 1
+    expect(misaligned.byteOffset % 4).not.toBe(0);
+
+    const decoded = await codec.decode(misaligned, ctx([2, 3]));
+    // Read defensively (decoded may itself be at any offset).
+    const view = new DataView(
+      decoded.buffer,
+      decoded.byteOffset,
+      decoded.byteLength,
+    );
+    expect(
+      Array.from({ length: 6 }, (_, i) => view.getInt32(i * 4, true)),
+    ).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("decodes 8-byte data from a misaligned input buffer", async () => {
+    const codec = new TransposeCodec({ id: "transpose", order: [1, 0] });
+    const values = new BigUint64Array([1n, 3n, 2n, 4n]);
+    const payload = new Uint8Array(values.buffer);
+    const padded = new Uint8Array(payload.byteLength + 3);
+    padded.set(payload, 3);
+    const misaligned = padded.subarray(3); // byteOffset === 3
+    expect(misaligned.byteOffset % 8).not.toBe(0);
+
+    const decoded = await codec.decode(misaligned, ctx([2, 2], "uint64"));
+    const view = new DataView(
+      decoded.buffer,
+      decoded.byteOffset,
+      decoded.byteLength,
+    );
+    expect(
+      Array.from({ length: 4 }, (_, i) => view.getBigUint64(i * 8, true)),
+    ).toEqual([1n, 2n, 3n, 4n]);
+  });
 });

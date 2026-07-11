@@ -120,6 +120,51 @@ describe("v3 array metadata parse (FR-003)", () => {
     expect(meta.fillValue).toBe(true);
   });
 
+  it("sign-extends hex fill values for signed integer dtypes (FR-011)", async () => {
+    // int8 0xff is the two's-complement pattern for -1, not 255.
+    const i8 = await parseV3ArrayMeta(
+      arrayDoc({
+        data_type: "int8",
+        fill_value: "0xff",
+        codecs: [{ name: "bytes" }],
+      }),
+      "",
+    );
+    expect(i8.fillValue).toBe(-1);
+
+    // int16 0xfffe → -2
+    const i16 = await parseV3ArrayMeta(
+      arrayDoc({ data_type: "int16", fill_value: "0xfffe" }),
+      "",
+    );
+    expect(i16.fillValue).toBe(-2);
+
+    // int32 0xffffffff → -1
+    const i32 = await parseV3ArrayMeta(
+      arrayDoc({ data_type: "int32", fill_value: "0xffffffff" }),
+      "",
+    );
+    expect(i32.fillValue).toBe(-1);
+  });
+
+  it("keeps unsigned integer hex fill values unsigned (FR-011)", async () => {
+    const u8 = await parseV3ArrayMeta(
+      arrayDoc({
+        data_type: "uint8",
+        fill_value: "0xff",
+        codecs: [{ name: "bytes" }],
+      }),
+      "",
+    );
+    expect(u8.fillValue).toBe(255);
+
+    const u16 = await parseV3ArrayMeta(
+      arrayDoc({ data_type: "uint16", fill_value: "0xfffe" }),
+      "",
+    );
+    expect(u16.fillValue).toBe(65534);
+  });
+
   it("carries attributes through", async () => {
     const meta = await parseV3ArrayMeta(
       arrayDoc({ attributes: { units: "K" } }),

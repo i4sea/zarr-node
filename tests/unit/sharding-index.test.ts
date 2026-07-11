@@ -118,4 +118,38 @@ describe("shard index decode (FR-012)", () => {
     const index = await decodeShardIndex(out, 1, pipeline, "big");
     expect(index).toEqual([{ offset: 32, nbytes: 64 }]);
   });
+
+  it("rejects an offset past the safe integer range instead of truncating", async () => {
+    const pipeline = await buildV3Pipeline(INDEX_CODECS_PLAIN);
+    // 2^53 + 1 is the first uint64 that JS `number` cannot represent exactly.
+    const raw = rawIndex([[BigInt(Number.MAX_SAFE_INTEGER) + 1n, 8n]]);
+    await expect(decodeShardIndex(raw, 1, pipeline, "little")).rejects.toThrow(
+      MetadataError,
+    );
+    await expect(decodeShardIndex(raw, 1, pipeline, "little")).rejects.toThrow(
+      /safe integer range/i,
+    );
+  });
+
+  it("rejects an nbytes past the safe integer range", async () => {
+    const pipeline = await buildV3Pipeline(INDEX_CODECS_PLAIN);
+    const raw = rawIndex([[0n, BigInt(Number.MAX_SAFE_INTEGER) + 1n]]);
+    await expect(decodeShardIndex(raw, 1, pipeline, "little")).rejects.toThrow(
+      MetadataError,
+    );
+  });
+
+  it("still accepts the exact-2^53 boundary (representable) and the empty marker", async () => {
+    const pipeline = await buildV3Pipeline(INDEX_CODECS_PLAIN);
+    const raw = rawIndex([
+      [BigInt(Number.MAX_SAFE_INTEGER), 8n],
+      [EMPTY, EMPTY], // empty inner chunk — never range-checked
+    ]);
+    const index = await decodeShardIndex(raw, 2, pipeline, "little");
+    expect(index[0]).toEqual({
+      offset: Number.MAX_SAFE_INTEGER,
+      nbytes: 8,
+    });
+    expect(index[1]).toBeNull();
+  });
 });

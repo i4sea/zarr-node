@@ -9,12 +9,23 @@ export interface TransposeCodecConfig {
   order?: unknown;
 }
 
-/** Element-size views that copy bit-exactly (no float canonicalization). */
+/**
+ * Element-size views that copy bit-exactly (no float canonicalization).
+ *
+ * A multi-byte typed-array view requires `byteOffset` to be a multiple of the
+ * element size; upstream decode stages (or a store returning a pooled Buffer)
+ * make no such guarantee, so we realign into a fresh 0-offset buffer when the
+ * incoming offset is unaligned. The 1-byte view is always safe.
+ */
 function elementView(
   data: Uint8Array,
   byteSize: number,
   elements: number,
 ): Uint8Array | Uint16Array | Uint32Array | BigUint64Array {
+  if (byteSize > 1 && data.byteOffset % byteSize !== 0) {
+    // `.slice()` copies into a new ArrayBuffer at offset 0 — always aligned.
+    data = data.slice();
+  }
   switch (byteSize) {
     case 1:
       return new Uint8Array(data.buffer, data.byteOffset, elements);

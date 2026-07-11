@@ -25,6 +25,9 @@ import { CodecError, MetadataError, MissingChunkError } from "../errors.js";
 /** Reserved marker: offset === nbytes === 2^64-1 ⇒ empty inner chunk. */
 const EMPTY_MARKER = 0xffffffffffffffffn;
 
+/** Largest uint64 that survives the round-trip through JS `number` exactly. */
+const MAX_SAFE_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+
 /** One decoded shard-index entry; null represents the empty marker. */
 export interface ShardIndexEntry {
   offset: number;
@@ -92,6 +95,19 @@ export async function decodeShardIndex(
     if (offset === EMPTY_MARKER && nbytes === EMPTY_MARKER) {
       entries[i] = null;
     } else {
+      // Store byte offsets/lengths are consumed as `number` by getRange and
+      // subarray. Reject values past 2^53 rather than silently truncating to
+      // the nearest double, which would point reads at the wrong bytes.
+      if (
+        offset > MAX_SAFE_BIGINT ||
+        nbytes > MAX_SAFE_BIGINT
+      ) {
+        throw new MetadataError(
+          `Shard index entry ${i} exceeds the safe integer range ` +
+            `(offset=${offset}, nbytes=${nbytes}): shard objects larger than ` +
+            `2^53 bytes are unsupported`,
+        );
+      }
       entries[i] = { offset: Number(offset), nbytes: Number(nbytes) };
     }
   }

@@ -241,6 +241,12 @@ export class ZarrArray {
     if (byteOrder === "big") {
       chunkBuf = Buffer.from(chunkBuf); // copy before in-place swap
       byteSwap(chunkBuf, byteSize);
+    } else if (byteSize > 1 && chunkBuf.byteOffset % byteSize !== 0) {
+      // A multi-byte typed-array view needs a byteOffset that is a multiple of
+      // the element size; decoded/pooled buffers make no such guarantee. Copy
+      // into a fresh 0-offset buffer when unaligned. (The big-endian branch
+      // above already copies, so it never needs this.)
+      chunkBuf = Buffer.from(chunkBuf);
     }
     if (widenHalfToFloat) {
       const halves = new Uint16Array(

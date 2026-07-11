@@ -143,6 +143,15 @@ export class ZarrGroup {
       }
       throw err;
     }
+    return this.arrayFromNode(node, name, path);
+  }
+
+  /** Materialize an already-detected child node into a `ZarrArray`. */
+  private arrayFromNode(
+    node: DetectedNode,
+    name: string,
+    path: string,
+  ): Promise<ZarrArray> {
     if (node.nodeType !== "array") {
       throw new MetadataError(
         `Node "${name}" at path "${path}" is a group, not an array`,
@@ -164,6 +173,15 @@ export class ZarrGroup {
       }
       throw err;
     }
+    return this.groupFromNode(node, name, path);
+  }
+
+  /** Materialize an already-detected child node into a `ZarrGroup`. */
+  private async groupFromNode(
+    node: DetectedNode,
+    name: string,
+    path: string,
+  ): Promise<ZarrGroup> {
     if (node.nodeType !== "group") {
       throw new MetadataError(
         `Node "${name}" at path "${path}" is an array, not a group`,
@@ -183,7 +201,8 @@ export class ZarrGroup {
     for (const name of await this.discoverChildren()) {
       const node = await this.tryDetectChild(name);
       if (node?.nodeType === "array") {
-        yield [name, await this.getArray(name)];
+        // Reuse the node from detection — no second probe (see getArray).
+        yield [name, await this.arrayFromNode(node, name, this.childPath(name))];
       }
     }
   }
@@ -192,7 +211,8 @@ export class ZarrGroup {
     for (const name of await this.discoverChildren()) {
       const node = await this.tryDetectChild(name);
       if (node?.nodeType === "group") {
-        yield [name, await this.getGroup(name)];
+        // Reuse the node from detection — no second probe (see getGroup).
+        yield [name, await this.groupFromNode(node, name, this.childPath(name))];
       }
     }
   }
