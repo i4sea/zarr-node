@@ -132,9 +132,10 @@ function distinctVertexCount(
 
 /**
  * Validate the shared inputs of {@link readPolygon} / {@link resolvePolygonCells}.
- * Throws {@link SliceError} on invalid input (< 3 distinct polygon vertices;
- * `timeAxis` other than 0; reversed or out-of-range `timeRange`; `maxCells < 1`).
- * An empty selection is NOT an error and is not detected here.
+ * Throws {@link SliceError} on invalid input (polygon vertex that is not a
+ * finite [lat, lon] pair; < 3 distinct polygon vertices; `timeAxis` other than
+ * 0; reversed or out-of-range `timeRange`; `maxCells` that is not a positive
+ * integer). An empty selection is NOT an error and is not detected here.
  *
  * @param nTime Length of the time axis (`arr.shape[timeAxis]`).
  * @internal
@@ -143,7 +144,27 @@ export function validatePolygonReadInput(
   opts: PolygonReadOptions,
   nTime: number,
 ): void {
-  if (!Array.isArray(opts.polygon) || distinctVertexCount(opts.polygon) < 3) {
+  if (!Array.isArray(opts.polygon)) {
+    throw new SliceError(
+      "polygon must have at least 3 distinct [lat, lon] vertices",
+    );
+  }
+  // Every vertex must be a pair of finite numbers; a malformed entry
+  // (wrong arity, NaN/Infinity) would silently poison the ray-cast and
+  // envelope math, selecting nothing instead of erroring.
+  for (const vertex of opts.polygon) {
+    if (
+      !Array.isArray(vertex) ||
+      vertex.length !== 2 ||
+      !Number.isFinite(vertex[0]) ||
+      !Number.isFinite(vertex[1])
+    ) {
+      throw new SliceError(
+        "polygon vertices must be [lat, lon] pairs of finite numbers",
+      );
+    }
+  }
+  if (distinctVertexCount(opts.polygon) < 3) {
     throw new SliceError(
       "polygon must have at least 3 distinct [lat, lon] vertices",
     );
@@ -171,8 +192,16 @@ export function validatePolygonReadInput(
       );
     }
   }
-  if (opts.maxCells !== undefined && (!(opts.maxCells >= 1) || !Number.isFinite(opts.maxCells))) {
-    throw new SliceError(`maxCells must be >= 1, got ${opts.maxCells}`);
+  // maxCells is a cell budget, so it must be a positive integer. This also
+  // rejects NaN and Infinity (Number.isInteger is false for both); the no-cap
+  // form is `undefined`, not Infinity.
+  if (
+    opts.maxCells !== undefined &&
+    (!Number.isInteger(opts.maxCells) || opts.maxCells < 1)
+  ) {
+    throw new SliceError(
+      `maxCells must be a positive integer, got ${opts.maxCells}`,
+    );
   }
 }
 
@@ -183,6 +212,22 @@ function assertNumericCoords(a: ArrayLike<number>, name: string): void {
   if (a instanceof BigInt64Array || a instanceof BigUint64Array) {
     throw new SliceError(
       `polygon reader: "${name}" has a 64-bit integer dtype; expected float/int coordinates`,
+    );
+  }
+}
+
+/**
+ * Reject an array whose rank does not match the layout's expected axis count
+ * (`[time, rows, cols]` for 1d/2d; `[time, npoints]` for npoints). Without this
+ * check a mismatched array produces chunk keys of the wrong arity, every chunk
+ * misses, and the read silently returns all-fill values instead of erroring.
+ */
+function assertArrayRank(arr: ZarrArray, resolver: LayoutResolver): void {
+  if (arr.shape.length !== resolver.ndim) {
+    throw new SliceError(
+      `polygon reader: array rank ${arr.shape.length} does not match the ` +
+        `spatialLayout, which expects a ${resolver.ndim}-D array ` +
+        `([time, ...spatial]); got shape ${JSON.stringify(arr.shape)}`,
     );
   }
 }
@@ -211,6 +256,12 @@ function polygonEnvelope(
  * the `arr.get` selection for a single time step over the bbox block.
  */
 interface LayoutResolver {
+  /**
+   * Total array rank this layout addresses: one leading time axis plus the
+   * spatial axes (3 for 1d/2d `[time, rows, cols]`; 2 for npoints
+   * `[time, npoints]`). Checked against `arr.shape.length`.
+   */
+  ndim: number;
   nRows: number;
   nCols: number;
   latAt(i: number, j: number): number;
@@ -234,34 +285,46 @@ function clampRange(lo: number, hi: number, n: number): [number, number] {
 
 function make2dResolver(grid: GridIndex): LayoutResolver {
   return {
+    ndim: 3, // [time, rows, cols]
     nRows: grid.ny,
     nCols: grid.nx,
     latAt: (i, j) => grid.latAt(i, j),
     lonAt: (i, j) => grid.lonAt(i, j),
     bbox(ring) {
-      // Envelope-corner nearest cells + 1-cell padding to guard against
-      // nearest misses on skewed/curvilinear grids.
+      // Exact index-space bbox for a curvilinear grid: scan every cell and
+      // keep those whose lat/lon fall inside the polygon's lat/lon envelope.
+      // The envelope superset contains every in-polygon cell, so the returned
+      // block never drops one — correct for arbitrarily skewed/rotated grids,
+      // unlike a corner-nearest + fixed-padding heuristic. O(ny·nx), the same
+      // order the mask gather over the box already pays.
       const env = polygonEnvelope(ring);
-      const corners: Array<[number, number]> = [
-        [env.latMin, env.lonMin],
-        [env.latMin, env.lonMax],
-        [env.latMax, env.lonMin],
-        [env.latMax, env.lonMax],
-      ];
       let rMin = Infinity;
       let rMax = -Infinity;
       let cMin = Infinity;
       let cMax = -Infinity;
-      for (const [lat, lon] of corners) {
-        const { i, j } = grid.nearest(lat, lon);
-        if (i < rMin) rMin = i;
-        if (i > rMax) rMax = i;
-        if (j < cMin) cMin = j;
-        if (j > cMax) cMax = j;
+      for (let i = 0; i < grid.ny; i++) {
+        for (let j = 0; j < grid.nx; j++) {
+          const lat = grid.latAt(i, j);
+          const lon = grid.lonAt(i, j);
+          if (
+            lat >= env.latMin &&
+            lat <= env.latMax &&
+            lon >= env.lonMin &&
+            lon <= env.lonMax
+          ) {
+            if (i < rMin) rMin = i;
+            if (i > rMax) rMax = i;
+            if (j < cMin) cMin = j;
+            if (j > cMax) cMax = j;
+          }
+        }
       }
-      const PAD = 1;
-      const [r0, r1] = clampRange(rMin - PAD, rMax + 1 + PAD, grid.ny);
-      const [c0, c1] = clampRange(cMin - PAD, cMax + 1 + PAD, grid.nx);
+      // No cell fell in the envelope ⇒ empty (degenerate) box.
+      if (rMin > rMax || cMin > cMax) {
+        return { rMin: 0, rMax: 0, cMin: 0, cMax: 0 };
+      }
+      const [r0, r1] = clampRange(rMin, rMax + 1, grid.ny);
+      const [c0, c1] = clampRange(cMin, cMax + 1, grid.nx);
       return { rMin: r0, rMax: r1, cMin: c0, cMax: c1 };
     },
     spatialSelect(timeAxis, t, bbox) {
@@ -301,6 +364,7 @@ function make1dResolver(
   assertNumericCoords(lat, "lat");
   assertNumericCoords(lon, "lon");
   return {
+    ndim: 3, // [time, rows, cols]
     nRows: lat.length,
     nCols: lon.length,
     latAt: (i) => lat[i],
@@ -326,6 +390,7 @@ function makeNpointsResolver(
   assertNumericCoords(lon, "lon");
   const n = lat.length;
   return {
+    ndim: 2, // [time, npoints]
     nRows: n,
     nCols: 1,
     latAt: (i) => lat[i],
@@ -445,8 +510,9 @@ function gatherCells(
  * @param opts Polygon, layout, and read options.
  * @returns The time-invariant selection; `cells: []` for a polygon that selects
  *   nothing (e.g. entirely outside the grid) — not an error (FR-017).
- * @throws {SliceError} on invalid input: < 3 distinct vertices, reversed/out-of
- *   -range `timeRange`, `maxCells < 1`, unsupported layout, or BigInt coords
+ * @throws {SliceError} on invalid input: non-finite polygon vertex, < 3 distinct
+ *   vertices, reversed/out-of-range `timeRange`, non-integer/`< 1` `maxCells`,
+ *   array rank not matching the layout, unsupported layout, or BigInt coords
  *   (FR-018).
  */
 export function resolvePolygonCells(
@@ -455,7 +521,8 @@ export function resolvePolygonCells(
 ): PolygonSelection {
   const timeAxis = opts.timeAxis ?? 0;
   validatePolygonReadInput(opts, arr.shape[timeAxis]);
-  const { cells, bbox, stride } = resolveSelection(opts);
+  const { cells, bbox, stride, resolver } = resolveSelection(opts);
+  assertArrayRank(arr, resolver);
   return { cells, bbox, stride };
 }
 
@@ -469,7 +536,11 @@ export function resolvePolygonCells(
  * chunk that spans the full time axis is fetched/decompressed at most once and
  * reused for every later step (FR-005) — and because only one time slice is
  * materialized at a time, peak working memory tracks ~one slice regardless of
- * the time extent (FR-006). A caller-supplied `readOptions.memoryCache` is
+ * the time extent (FR-006). (One exception to the fetch-once reuse: for an
+ * *uncompressed* C-order array whose bbox spans the full stored chunk width in
+ * every trailing axis, `ZarrArray.get` serves each step with an uncached
+ * partial byte-range read, so those steps re-read from the store; the
+ * one-slice memory bound still holds.) A caller-supplied `readOptions.memoryCache` is
  * honored; otherwise an internal cache is created per call and discarded when
  * the generator completes. All other `readOptions` (concurrency,
  * maxInFlightBytes, observability, ...) are forwarded (FR-016).
@@ -488,6 +559,7 @@ export async function* readPolygon(
   validatePolygonReadInput(opts, nTime);
 
   const { cells, bbox, resolver } = resolveSelection(opts);
+  assertArrayRank(arr, resolver);
   if (cells.length === 0) return;
 
   const [tStart, tEnd] = opts.timeRange ?? [0, nTime];

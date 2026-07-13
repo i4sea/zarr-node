@@ -379,6 +379,47 @@ describe("validatePolygonReadInput", () => {
     ).toThrow(SliceError);
   });
 
+  it("rejects a non-integer, NaN, or Infinite maxCells", () => {
+    for (const maxCells of [2.5, NaN, Infinity]) {
+      expect(() =>
+        validatePolygonReadInput(
+          {
+            polygon: okPoly,
+            spatialLayout: { kind: "npoints", lat: [], lon: [] },
+            maxCells,
+          },
+          10,
+        ),
+      ).toThrow(SliceError);
+    }
+  });
+
+  it("rejects a polygon vertex that is not a finite [lat, lon] pair", () => {
+    const cases: Array<Array<[number, number]>> = [
+      // NaN / Infinity components.
+      [
+        [0, 0],
+        [NaN, 1],
+        [1, 1],
+      ],
+      [
+        [0, 0],
+        [0, Infinity],
+        [1, 1],
+      ],
+      // Wrong arity (single-element vertex).
+      [[0, 0], [0, 1], [1] as unknown as [number, number]],
+    ];
+    for (const polygon of cases) {
+      expect(() =>
+        validatePolygonReadInput(
+          { polygon, spatialLayout: { kind: "npoints", lat: [], lon: [] } },
+          10,
+        ),
+      ).toThrow(SliceError);
+    }
+  });
+
   it("accepts valid input (empty timeRange [n,n] is allowed)", () => {
     expect(() =>
       validatePolygonReadInput(
@@ -1213,5 +1254,125 @@ describe("ring closure equivalence across layouts", () => {
       spatialLayout: { kind: "npoints", lat: latPts, lon: lonPts },
     });
     expect(a.cells).toEqual(b.cells);
+  });
+});
+
+// ── Regression: array rank must match the layout (no silent all-fill read) ───
+
+describe("array rank validation", () => {
+  it("rejects a 2-D array for a 2d layout (needs [time, rows, cols])", async () => {
+    const grid = makeGrid(
+      5,
+      5,
+      (i) => i,
+      (j) => j,
+    );
+    // Missing the trailing spatial axis: shape is [time, rows] not [t, r, c].
+    const { arr } = await makeArray({
+      shape: [3, 5],
+      chunks: [3, 5],
+      filler: () => 1,
+    });
+    expect(() =>
+      resolvePolygonCells(arr, {
+        polygon: CONCAVE_POLY,
+        spatialLayout: { kind: "2d", grid },
+      }),
+    ).toThrow(SliceError);
+  });
+
+  it("rejects a 4-D array for a 1d layout (before any yield)", async () => {
+    const lat1d = [0, 1, 2, 3, 4];
+    const lon1d = [0, 1, 2, 3, 4];
+    // [time, level, rows, cols] — one axis too many for the 1d layout.
+    const { arr } = await makeArray({
+      shape: [2, 2, 5, 5],
+      chunks: [2, 2, 5, 5],
+      filler: () => 1,
+    });
+    await expect(
+      collect(
+        readPolygon(arr, {
+          polygon: CONCAVE_POLY,
+          spatialLayout: { kind: "1d", lat: lat1d, lon: lon1d },
+        }),
+      ),
+    ).rejects.toThrow(SliceError);
+  });
+
+  it("rejects a 3-D array for an npoints layout (needs [time, npoints])", async () => {
+    const latPts = [0, 1, 2, 3, 4];
+    const lonPts = [0, 1, 2, 3, 4];
+    const { arr } = await makeArray({
+      shape: [2, 5, 5],
+      chunks: [2, 5, 5],
+      filler: () => 1,
+    });
+    expect(() =>
+      resolvePolygonCells(arr, {
+        polygon: CONCAVE_POLY,
+        spatialLayout: { kind: "npoints", lat: latPts, lon: lonPts },
+      }),
+    ).toThrow(SliceError);
+  });
+});
+
+// ── Regression: exact bbox on a strongly-skewed grid (no PAD heuristic) ──────
+
+describe("2d bbox exactness on a non-linear curvilinear grid", () => {
+  it("selects every in-polygon cell where corner-nearest + PAD=1 would miss", async () => {
+    // A sinusoidally warped grid: lat/lon are NOT monotone in i/j, so the four
+    // envelope corners map (via nearest) to cells that do not bracket the true
+    // in-polygon index span. A fixed 1-cell pad around the corner-nearest box
+    // cannot recover the miss (verified: this fixture drops 3 in-polygon cells
+    // under the old heuristic); the exact envelope scan must catch all of them.
+    const ny = 20;
+    const nx = 20;
+    const lat = new Float32Array(ny * nx);
+    const lon = new Float32Array(ny * nx);
+    for (let i = 0; i < ny; i++) {
+      for (let j = 0; j < nx; j++) {
+        lat[i * nx + j] = i + 3 * Math.sin(j * 0.5);
+        lon[i * nx + j] = j + 3 * Math.sin(i * 0.5);
+      }
+    }
+    const grid = GridIndex.fromCoordinates(lat, lon, ny, nx);
+    const poly: Array<[number, number]> = [
+      [6, 6],
+      [6, 12],
+      [12, 12],
+      [12, 6],
+    ];
+    const { arr } = await makeArray({
+      shape: [1, ny, nx],
+      chunks: [1, ny, nx],
+      filler: (_t, r, c) => r * 1000 + c, // encode index in value
+    });
+
+    const sel = resolvePolygonCells(arr, {
+      polygon: poly,
+      spatialLayout: { kind: "2d", grid },
+    });
+
+    // Brute-force truth over the real per-cell lat/lon.
+    const ref = new Set<string>();
+    for (let i = 0; i < ny; i++)
+      for (let j = 0; j < nx; j++)
+        if (pointInPolygon(grid.latAt(i, j), grid.lonAt(i, j), poly))
+          ref.add(`${i},${j}`);
+    const got = new Set(sel.cells.map((c) => `${c.i},${c.j}`));
+
+    expect(ref.size).toBeGreaterThan(0);
+    // Exhaustive equality: no in-polygon cell missed, nothing spurious added.
+    expect(got).toEqual(ref);
+
+    // And the streamed values land on the right cells (value encodes r*100+c).
+    const [step] = await collect(
+      readPolygon(arr, { polygon: poly, spatialLayout: { kind: "2d", grid } }),
+    );
+    for (let k = 0; k < sel.cells.length; k++) {
+      const cell = sel.cells[k];
+      expect(step.values[k]).toBe(cell.i * 1000 + cell.j);
+    }
   });
 });
