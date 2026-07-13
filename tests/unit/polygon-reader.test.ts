@@ -1,8 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  readPolygon,
-  resolvePolygonCells,
-} from "../../src/spatial/index.js";
+import { readPolygon, resolvePolygonCells } from "../../src/spatial/index.js";
 import type { PolygonSelection } from "../../src/spatial/index.js";
 import { GridIndex } from "../../src/spatial/index.js";
 import {
@@ -125,7 +122,8 @@ async function makeArray(
     // Fill each local element with filler(global indices) (0 outside shape).
     const strides: number[] = new Array(ndim);
     strides[ndim - 1] = 1;
-    for (let d = ndim - 2; d >= 0; d--) strides[d] = strides[d + 1] * chunks[d + 1];
+    for (let d = ndim - 2; d >= 0; d--)
+      strides[d] = strides[d + 1] * chunks[d + 1];
     for (let lin = 0; lin < chunkElems; lin++) {
       const gidx: number[] = new Array(ndim);
       let rem = lin;
@@ -139,10 +137,7 @@ async function makeArray(
       buf[lin] = inBounds ? opts.filler(...gidx) : 0;
     }
     const key = coord.join(".");
-    map.set(
-      key,
-      new Uint8Array(buf.buffer, 0, chunkElems * bytesPer),
-    );
+    map.set(key, new Uint8Array(buf.buffer, 0, chunkElems * bytesPer));
   }
 
   const base: Store = new MapStore(map);
@@ -488,7 +483,13 @@ describe("resolvePolygonCells (2-D supplied grid)", () => {
       spatialLayout: { kind: "2d", grid: GRID_5x5 },
     });
 
-    const ref = referenceCells(5, 5, (i) => i, (j) => j, CONCAVE_POLY);
+    const ref = referenceCells(
+      5,
+      5,
+      (i) => i,
+      (j) => j,
+      CONCAVE_POLY,
+    );
     expect(sel.cells.map((c) => [c.i, c.j])).toEqual(ref);
     // row-major: non-decreasing i, and increasing j within each i.
     for (let k = 1; k < sel.cells.length; k++) {
@@ -503,11 +504,15 @@ describe("resolvePolygonCells (2-D supplied grid)", () => {
     }
     // half-open bbox (block-read extent) contains the selection; the 2-D
     // resolver may pad by a cell to guard skewed-grid nearest misses.
-    expect(sel.bbox.rMin).toBeLessThanOrEqual(Math.min(...ref.map((c) => c[0])));
+    expect(sel.bbox.rMin).toBeLessThanOrEqual(
+      Math.min(...ref.map((c) => c[0])),
+    );
     expect(sel.bbox.rMax).toBeGreaterThanOrEqual(
       Math.max(...ref.map((c) => c[0])) + 1,
     );
-    expect(sel.bbox.cMin).toBeLessThanOrEqual(Math.min(...ref.map((c) => c[1])));
+    expect(sel.bbox.cMin).toBeLessThanOrEqual(
+      Math.min(...ref.map((c) => c[1])),
+    );
     expect(sel.bbox.cMax).toBeGreaterThanOrEqual(
       Math.max(...ref.map((c) => c[1])) + 1,
     );
@@ -730,7 +735,10 @@ describe("resolvePolygonCells (1d-rectilinear)", () => {
       chunks: [2, 10, 8],
       filler: (t, r, c) => t * 1000 + r * 10 + c,
     });
-    const sel = resolvePolygonCells(arr, { polygon: box, spatialLayout: layout });
+    const sel = resolvePolygonCells(arr, {
+      polygon: box,
+      spatialLayout: layout,
+    });
 
     // Expected in-polygon cells (lat=10+i in (12.5,15.5), lon=20+j in (22.5,24.5)).
     const ref: Array<[number, number]> = [];
@@ -756,7 +764,10 @@ describe("resolvePolygonCells (1d-rectilinear)", () => {
       chunks: [3, 10, 8],
       filler: (t, r, c) => t * 1000 + r * 10 + c,
     });
-    const sel = resolvePolygonCells(arr, { polygon: box, spatialLayout: layout });
+    const sel = resolvePolygonCells(arr, {
+      polygon: box,
+      spatialLayout: layout,
+    });
     const steps = await collect(
       readPolygon(arr, { polygon: box, spatialLayout: layout }),
     );
@@ -815,7 +826,13 @@ describe("resolvePolygonCells (2d-curvilinear, real GridIndex)", () => {
       polygon: poly,
       spatialLayout: { kind: "2d", grid },
     });
-    const ref = referenceCells(ny, nx, (i) => i, (j) => j, poly);
+    const ref = referenceCells(
+      ny,
+      nx,
+      (i) => i,
+      (j) => j,
+      poly,
+    );
     expect(sel.cells.map((c) => [c.i, c.j])).toEqual(ref);
     for (const cell of sel.cells) {
       expect(cell.lat).toBe(grid.latAt(cell.i, cell.j));
@@ -845,7 +862,10 @@ describe("resolvePolygonCells / readPolygon (npoints)", () => {
       chunks: [4, 6],
       filler: (t, p) => t * 100 + p,
     });
-    const sel = resolvePolygonCells(arr, { polygon: box, spatialLayout: layout });
+    const sel = resolvePolygonCells(arr, {
+      polygon: box,
+      spatialLayout: layout,
+    });
     expect(sel.cells.map((c) => c.i)).toEqual([1, 2, 3]);
     expect(sel.cells.every((c) => c.j === 0)).toBe(true);
     for (const cell of sel.cells) {
@@ -863,7 +883,10 @@ describe("resolvePolygonCells / readPolygon (npoints)", () => {
       chunks: [3, 6],
       filler: (t, p) => t * 100 + p,
     });
-    const sel = resolvePolygonCells(arr, { polygon: box, spatialLayout: layout });
+    const sel = resolvePolygonCells(arr, {
+      polygon: box,
+      spatialLayout: layout,
+    });
     const steps = await collect(
       readPolygon(arr, { polygon: box, spatialLayout: layout }),
     );
@@ -1135,14 +1158,22 @@ describe("1d-rectilinear descending axis", () => {
       chunks: [2, 10, 8],
       filler: (t, r, c) => t * 1000 + r * 10 + c,
     });
-    const sel = resolvePolygonCells(arr, { polygon: box, spatialLayout: layout });
+    const sel = resolvePolygonCells(arr, {
+      polygon: box,
+      spatialLayout: layout,
+    });
 
     // Expected cells: lat in (2.5,5.5) → 9-i ∈ (2.5,5.5) → i ∈ {4,5,6};
     // lon in (1.5,3.5) → j ∈ {2,3}.
     const ref: Array<[number, number]> = [];
     for (let i = 0; i < 10; i++)
       for (let j = 0; j < 8; j++)
-        if (lat1d[i] > 2.5 && lat1d[i] < 5.5 && lon1d[j] > 1.5 && lon1d[j] < 3.5)
+        if (
+          lat1d[i] > 2.5 &&
+          lat1d[i] < 5.5 &&
+          lon1d[j] > 1.5 &&
+          lon1d[j] < 3.5
+        )
           ref.push([i, j]);
     expect(sel.cells.map((c) => [c.i, c.j])).toEqual(ref);
     for (const cell of sel.cells) {

@@ -111,10 +111,7 @@ export function pointInPolygon(
     const xi = ring[i][1];
     const yj = ring[j][0];
     const xj = ring[j][1];
-    if (
-      yi > y !== yj > y &&
-      x < ((xj - xi) * (y - yi)) / (yj - yi) + xi
-    ) {
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) {
       inside = !inside;
     }
   }
@@ -233,9 +230,12 @@ function assertArrayRank(arr: ZarrArray, resolver: LayoutResolver): void {
 }
 
 /** Bounding box in polygon (lat/lon) space. */
-function polygonEnvelope(
-  ring: Array<[number, number]>,
-): { latMin: number; latMax: number; lonMin: number; lonMax: number } {
+function polygonEnvelope(ring: Array<[number, number]>): {
+  latMin: number;
+  latMax: number;
+  lonMin: number;
+  lonMax: number;
+} {
   let latMin = Infinity;
   let latMax = -Infinity;
   let lonMin = Infinity;
@@ -449,9 +449,7 @@ interface ResolvedSelection extends PolygonSelection {
   resolver: LayoutResolver;
 }
 
-function resolveSelection(
-  opts: PolygonReadOptions,
-): ResolvedSelection {
+function resolveSelection(opts: PolygonReadOptions): ResolvedSelection {
   const resolver = resolveLayout(opts.spatialLayout);
   const bbox = resolver.bbox(opts.polygon);
   const rows = bbox.rMax - bbox.rMin;
