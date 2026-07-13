@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-07-13
+
 ### Added
 
 - **Polygon spatial reader (`@i4sea/zarr-node/spatial`).** `readPolygon(arr, opts)` streams, one time step at a time, only the cells geometrically inside a lat/lon polygon of a `[time, ...spatial]` array — a ray-cast, concave-correct mask over the polygon's bounding box — yielding a `Float64Array` of the in-polygon values per step in row-major order. Each step is read as a bounding-box block sharing one `MemoryCache`, so every bbox-overlapping chunk is fetched/decompressed at most once (chunks typically span the full time axis and are reused across steps) and peak working memory stays bounded to ~one time slice regardless of the time extent. `resolvePolygonCells(arr, opts)` returns the time-invariant selection (`cells` with per-cell `i/j` + `lat/lon`, the half-open `bbox`, and the applied `stride`) without reading values; `cells[k]` aligns with `step.values[k]`. Three coordinate layouts: `{ kind: "1d", lat, lon }` (monotonic axes, binary search), `{ kind: "2d", grid }` (curvilinear `GridIndex`), and `{ kind: "npoints", lat, lon }` (unstructured points). An optional `maxCells` budget triggers a clamped uniform spatial stride (reported as `selection.stride`; no default cap, and a non-empty polygon never sub-samples to zero). Ring closure is implicit (closed == unclosed), invalid input throws `SliceError`, an empty selection completes cleanly, and `readOptions` (concurrency / maxInFlightBytes / observability / memoryCache) are forwarded to the per-step reads. Additive only — the point-read path is untouched.
