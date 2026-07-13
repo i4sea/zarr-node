@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-07-13
+
+### Changed
+
+- **Polygon reader 1-D layout uses binary search.** `axisRange` (the `{ kind: "1d" }` bbox resolver) now locates the in-envelope index span with a direction-aware binary search (O(log n)) on the monotonic axis instead of a full linear scan, matching the approach stated in the spec. Result is unchanged for ascending and descending axes.
+- **`maxCells` stride computed by binary search.** `computeStride` binary-searches the smallest fitting stride (the fit predicate is monotone in the stride) instead of incrementing one at a time — O(log) rather than O(max(rows, cols)) when a large bounding box overruns a small `maxCells`.
+- **Array-rank validation runs before the selection scan.** `readPolygon` / `resolvePolygonCells` now assert the array rank matches the chosen `spatialLayout` immediately after resolving the layout, before the (potentially expensive) bounding-box scan and mask gather — a rank/layout mismatch fails fast instead of doing wasted work on large grids.
+
+### Fixed
+
+- **Docs:** the quickstart's `MemoryCache` example now uses the `{ maxBytes }` options object (was a bare number); corrected a misleading cost comment on the 2-D curvilinear envelope scan.
+
 ## [0.9.0] — 2026-07-13
 
 ### Added
