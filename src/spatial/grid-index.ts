@@ -201,6 +201,16 @@ export class GridIndex {
     return points.map(([lat, lon]) => this.nearest(lat, lon));
   }
 
+  /** Latitude of grid cell `(i, j)` (row `i`, column `j`). */
+  latAt(i: number, j: number): number {
+    return this.lat[i * this.nx + j];
+  }
+
+  /** Longitude of grid cell `(i, j)` (row `i`, column `j`). */
+  lonAt(i: number, j: number): number {
+    return this.lon[i * this.nx + j];
+  }
+
   /**
    * Compact binary snapshot: `magic(u32) ny(u32) nx(u32)` then lat then lon as
    * little-endian f32. Suitable for storing in Redis as a raw buffer.
