@@ -33,7 +33,10 @@ export interface PolygonReadOptions {
   polygon: Array<[number, number]>;
   /** How lat/lon map to spatial indices. */
   spatialLayout: SpatialLayout;
-  /** Axis index of time. Default: 0. */
+  /**
+   * Axis index of time. v1 supports only a leading time axis, so this must be
+   * `0`; any other value throws `SliceError`. Default: 0.
+   */
   timeAxis?: number;
   /** Half-open [startIdx, endIdx) in time indices. Default: full time extent. */
   timeRange?: [number, number];
@@ -130,8 +133,8 @@ function distinctVertexCount(
 /**
  * Validate the shared inputs of {@link readPolygon} / {@link resolvePolygonCells}.
  * Throws {@link SliceError} on invalid input (< 3 distinct polygon vertices;
- * reversed or out-of-range `timeRange`; `maxCells < 1`). An empty selection is
- * NOT an error and is not detected here.
+ * `timeAxis` other than 0; reversed or out-of-range `timeRange`; `maxCells < 1`).
+ * An empty selection is NOT an error and is not detected here.
  *
  * @param nTime Length of the time axis (`arr.shape[timeAxis]`).
  * @internal
@@ -143,6 +146,15 @@ export function validatePolygonReadInput(
   if (!Array.isArray(opts.polygon) || distinctVertexCount(opts.polygon) < 3) {
     throw new SliceError(
       "polygon must have at least 3 distinct [lat, lon] vertices",
+    );
+  }
+  // v1 supports only a leading time axis with the spatial axes trailing
+  // (research D7). A non-zero `timeAxis` is rejected rather than silently
+  // producing a transposed, corrupt selection.
+  if (opts.timeAxis !== undefined && opts.timeAxis !== 0) {
+    throw new SliceError(
+      `timeAxis must be 0 in this version (got ${opts.timeAxis}); ` +
+        `only a leading time axis is supported`,
     );
   }
   if (opts.timeRange !== undefined) {

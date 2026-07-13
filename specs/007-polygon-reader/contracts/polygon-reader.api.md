@@ -24,7 +24,7 @@ export interface PolygonReadOptions {
   polygon: Array<[number, number]>;
   /** How lat/lon map to spatial indices. */
   spatialLayout: SpatialLayout;
-  /** Axis index of time. Default: 0. */
+  /** Axis index of time. v1: must be 0 (leading time axis); other values throw SliceError. Default: 0. */
   timeAxis?: number;
   /** Half-open [startIdx, endIdx) in time indices. Default: full time extent. */
   timeRange?: [number, number];

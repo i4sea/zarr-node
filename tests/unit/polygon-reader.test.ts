@@ -940,3 +940,278 @@ describe("resolvePolygonCells adaptive maxCells stride", () => {
     expect(sel.stride).toBeGreaterThan(1);
   });
 });
+
+// ── Regression: timeAxis is v1-restricted to 0 ───────────────────────────────
+
+describe("timeAxis validation (v1: must be 0)", () => {
+  const layout = { kind: "2d" as const, grid: GRID_5x5 };
+
+  it("rejects a non-zero timeAxis in resolvePolygonCells", async () => {
+    const { arr } = await makeArray({
+      shape: [5, 5, 3],
+      chunks: [5, 5, 3],
+      filler: () => 1,
+    });
+    expect(() =>
+      resolvePolygonCells(arr, {
+        polygon: CONCAVE_POLY,
+        spatialLayout: layout,
+        timeAxis: 2,
+      }),
+    ).toThrow(SliceError);
+  });
+
+  it("rejects a non-zero timeAxis in readPolygon (before any yield)", async () => {
+    const { arr } = await makeArray({
+      shape: [5, 5, 3],
+      chunks: [5, 5, 3],
+      filler: () => 1,
+    });
+    await expect(
+      collect(
+        readPolygon(arr, {
+          polygon: CONCAVE_POLY,
+          spatialLayout: layout,
+          timeAxis: 1,
+        }),
+      ),
+    ).rejects.toThrow(SliceError);
+  });
+
+  it("accepts timeAxis: 0 explicitly (same as default)", async () => {
+    const { arr } = await makeArray({
+      shape: [2, 5, 5],
+      chunks: [2, 5, 5],
+      filler: (t, r, c) => t * 100 + r * 10 + c,
+    });
+    const a = resolvePolygonCells(arr, {
+      polygon: CONCAVE_POLY,
+      spatialLayout: layout,
+      timeAxis: 0,
+    });
+    const b = resolvePolygonCells(arr, {
+      polygon: CONCAVE_POLY,
+      spatialLayout: layout,
+    });
+    expect(a.cells).toEqual(b.cells);
+  });
+});
+
+// ── Regression: value dtype normalization to Float64Array ────────────────────
+
+describe("value dtype normalization", () => {
+  const layout = { kind: "2d" as const, grid: GRID_5x5 };
+
+  it("streams <f4 array values as Float64Array aligned to cells", async () => {
+    const { arr } = await makeArray({
+      shape: [2, 5, 5],
+      chunks: [2, 5, 5],
+      dtype: "<f4",
+      filler: (t, r, c) => t + r * 0.5 + c * 0.25,
+    });
+    const sel = resolvePolygonCells(arr, {
+      polygon: CONCAVE_POLY,
+      spatialLayout: layout,
+    });
+    const steps = await collect(
+      readPolygon(arr, { polygon: CONCAVE_POLY, spatialLayout: layout }),
+    );
+    for (const step of steps) {
+      expect(step.values).toBeInstanceOf(Float64Array);
+      sel.cells.forEach((cell, k) => {
+        expect(step.values[k]).toBeCloseTo(
+          step.t + cell.i * 0.5 + cell.j * 0.25,
+          5,
+        );
+      });
+    }
+  });
+
+  it("streams <i4 array values as Float64Array with exact integers", async () => {
+    const { arr } = await makeArray({
+      shape: [2, 5, 5],
+      chunks: [2, 5, 5],
+      dtype: "<i4",
+      filler: (t, r, c) => t * 1000 + r * 10 + c,
+    });
+    const sel = resolvePolygonCells(arr, {
+      polygon: CONCAVE_POLY,
+      spatialLayout: layout,
+    });
+    const steps = await collect(
+      readPolygon(arr, { polygon: CONCAVE_POLY, spatialLayout: layout }),
+    );
+    for (const step of steps) {
+      expect(step.values).toBeInstanceOf(Float64Array);
+      sel.cells.forEach((cell, k) => {
+        expect(step.values[k]).toBe(step.t * 1000 + cell.i * 10 + cell.j);
+      });
+    }
+  });
+});
+
+// ── Regression: NaN (missing value) passes through, cell not dropped ─────────
+
+describe("NaN / missing value passthrough", () => {
+  it("keeps in-polygon cells whose value is NaN, delivering NaN", async () => {
+    const layout = { kind: "2d" as const, grid: GRID_5x5 };
+    // Mark cell (2,1) as NaN — it is inside CONCAVE_POLY's left lobe.
+    const { arr } = await makeArray({
+      shape: [1, 5, 5],
+      chunks: [1, 5, 5],
+      filler: (_t, r, c) => (r === 2 && c === 1 ? NaN : r * 10 + c),
+    });
+    const sel = resolvePolygonCells(arr, {
+      polygon: CONCAVE_POLY,
+      spatialLayout: layout,
+    });
+    const nanCellIdx = sel.cells.findIndex((c) => c.i === 2 && c.j === 1);
+    expect(nanCellIdx).toBeGreaterThanOrEqual(0); // cell IS selected
+
+    const [step] = await collect(
+      readPolygon(arr, { polygon: CONCAVE_POLY, spatialLayout: layout }),
+    );
+    expect(step.values.length).toBe(sel.cells.length); // not dropped
+    expect(Number.isNaN(step.values[nanCellIdx])).toBe(true);
+  });
+});
+
+// ── Regression: 1d descending axis ───────────────────────────────────────────
+
+describe("1d-rectilinear descending axis", () => {
+  it("resolves correctly when the lat axis descends (lat = 9 - i)", async () => {
+    const lat1d = Array.from({ length: 10 }, (_, i) => 9 - i); // 9..0 descending
+    const lon1d = Array.from({ length: 8 }, (_, j) => j); // 0..7 ascending
+    const layout = { kind: "1d" as const, lat: lat1d, lon: lon1d };
+    const box: Array<[number, number]> = [
+      [2.5, 1.5],
+      [2.5, 3.5],
+      [5.5, 3.5],
+      [5.5, 1.5],
+    ];
+    const { arr } = await makeArray({
+      shape: [2, 10, 8],
+      chunks: [2, 10, 8],
+      filler: (t, r, c) => t * 1000 + r * 10 + c,
+    });
+    const sel = resolvePolygonCells(arr, { polygon: box, spatialLayout: layout });
+
+    // Expected cells: lat in (2.5,5.5) → 9-i ∈ (2.5,5.5) → i ∈ {4,5,6};
+    // lon in (1.5,3.5) → j ∈ {2,3}.
+    const ref: Array<[number, number]> = [];
+    for (let i = 0; i < 10; i++)
+      for (let j = 0; j < 8; j++)
+        if (lat1d[i] > 2.5 && lat1d[i] < 5.5 && lon1d[j] > 1.5 && lon1d[j] < 3.5)
+          ref.push([i, j]);
+    expect(sel.cells.map((c) => [c.i, c.j])).toEqual(ref);
+    for (const cell of sel.cells) {
+      expect(cell.lat).toBe(lat1d[cell.i]);
+      expect(cell.lon).toBe(lon1d[cell.j]);
+    }
+    // Streamed values align to cells even with the descending axis.
+    const steps = await collect(
+      readPolygon(arr, { polygon: box, spatialLayout: layout }),
+    );
+    for (const step of steps)
+      sel.cells.forEach((cell, k) =>
+        expect(step.values[k]).toBe(step.t * 1000 + cell.i * 10 + cell.j),
+      );
+  });
+});
+
+// ── Regression: genuinely skewed curvilinear grid ────────────────────────────
+
+describe("2d-curvilinear genuinely skewed grid", () => {
+  it("bbox padding covers every in-polygon cell on a rotated grid", async () => {
+    // Rotated/skewed grid: lat and lon both depend on i AND j.
+    const ny = 10;
+    const nx = 10;
+    const lat = new Float32Array(ny * nx);
+    const lon = new Float32Array(ny * nx);
+    for (let i = 0; i < ny; i++) {
+      for (let j = 0; j < nx; j++) {
+        lat[i * nx + j] = i + 0.4 * j;
+        lon[i * nx + j] = j - 0.4 * i;
+      }
+    }
+    const grid = GridIndex.fromCoordinates(lat, lon, ny, nx);
+    const { arr } = await makeArray({
+      shape: [1, ny, nx],
+      chunks: [1, ny, nx],
+      filler: () => 1,
+    });
+    const poly: Array<[number, number]> = [
+      [3, 2],
+      [3, 6],
+      [7, 6],
+      [7, 2],
+    ];
+    const sel = resolvePolygonCells(arr, {
+      polygon: poly,
+      spatialLayout: { kind: "2d", grid },
+    });
+
+    // Brute-force reference over the true per-cell lat/lon.
+    const ref = new Set<string>();
+    for (let i = 0; i < ny; i++)
+      for (let j = 0; j < nx; j++)
+        if (pointInPolygon(grid.latAt(i, j), grid.lonAt(i, j), poly))
+          ref.add(`${i},${j}`);
+    const got = new Set(sel.cells.map((c) => `${c.i},${c.j}`));
+    // No in-polygon cell is missed by the padded bbox.
+    for (const key of ref) expect(got.has(key)).toBe(true);
+    // And everything returned is genuinely inside.
+    for (const key of got) expect(ref.has(key)).toBe(true);
+    expect(ref.size).toBeGreaterThan(0);
+  });
+});
+
+// ── Regression: ring closure equivalence in 1d and npoints layouts ───────────
+
+describe("ring closure equivalence across layouts", () => {
+  const openRing: Array<[number, number]> = [
+    [1.5, 1.5],
+    [1.5, 3.5],
+    [3.5, 3.5],
+    [3.5, 1.5],
+  ];
+  const closedRing: Array<[number, number]> = [...openRing, [1.5, 1.5]];
+
+  it("1d: closed == unclosed selection", async () => {
+    const lat1d = Array.from({ length: 6 }, (_, i) => i);
+    const lon1d = Array.from({ length: 6 }, (_, j) => j);
+    const { arr } = await makeArray({
+      shape: [1, 6, 6],
+      chunks: [1, 6, 6],
+      filler: () => 1,
+    });
+    const a = resolvePolygonCells(arr, {
+      polygon: openRing,
+      spatialLayout: { kind: "1d", lat: lat1d, lon: lon1d },
+    });
+    const b = resolvePolygonCells(arr, {
+      polygon: closedRing,
+      spatialLayout: { kind: "1d", lat: lat1d, lon: lon1d },
+    });
+    expect(a.cells).toEqual(b.cells);
+  });
+
+  it("npoints: closed == unclosed selection", async () => {
+    const latPts = [0, 1, 2, 3, 4, 5];
+    const lonPts = [0, 1, 2, 3, 4, 5];
+    const { arr } = await makeArray({
+      shape: [1, 6],
+      chunks: [1, 6],
+      filler: () => 1,
+    });
+    const a = resolvePolygonCells(arr, {
+      polygon: openRing,
+      spatialLayout: { kind: "npoints", lat: latPts, lon: lonPts },
+    });
+    const b = resolvePolygonCells(arr, {
+      polygon: closedRing,
+      spatialLayout: { kind: "npoints", lat: latPts, lon: lonPts },
+    });
+    expect(a.cells).toEqual(b.cells);
+  });
+});
