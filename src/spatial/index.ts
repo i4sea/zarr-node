@@ -7,3 +7,13 @@ export type {
   LoadCachedOptions,
   FromGroupOptions,
 } from "./grid-index.js";
+
+export { readPolygon, resolvePolygonCells } from "./polygon-reader.js";
+export type {
+  SpatialLayout,
+  PolygonReadOptions,
+  PolygonCell,
+  PolygonBBox,
+  PolygonSelection,
+  PolygonTimestep,
+} from "./polygon-reader.js";
