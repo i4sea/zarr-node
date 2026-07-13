@@ -295,8 +295,9 @@ function make2dResolver(grid: GridIndex): LayoutResolver {
       // keep those whose lat/lon fall inside the polygon's lat/lon envelope.
       // The envelope superset contains every in-polygon cell, so the returned
       // block never drops one — correct for arbitrarily skewed/rotated grids,
-      // unlike a corner-nearest + fixed-padding heuristic. O(ny·nx), the same
-      // order the mask gather over the box already pays.
+      // unlike a corner-nearest + fixed-padding heuristic. This full-grid scan
+      // is O(ny·nx); for a small polygon it can dominate the later mask gather,
+      // which only iterates the (much smaller) resulting bbox.
       const env = polygonEnvelope(ring);
       let rMin = Infinity;
       let rMax = -Infinity;
@@ -337,24 +338,81 @@ function make2dResolver(grid: GridIndex): LayoutResolver {
 
 /**
  * Half-open `[start, end)` index range on a monotonic axis whose coordinates
- * fall within `[lo, hi]`. Works for ascending or descending axes (the index
- * span is direction-agnostic). Empty range ⇒ `[0, 0]`.
+ * fall within `[lo, hi]`, via binary search (O(log n)). Works for ascending or
+ * descending axes (the index span is direction-agnostic). Empty range ⇒
+ * `[0, 0]`.
  */
 function axisRange(
   axis: ArrayLike<number>,
   lo: number,
   hi: number,
 ): [number, number] {
-  let start = axis.length;
-  let end = 0;
-  for (let k = 0; k < axis.length; k++) {
-    const v = axis[k];
-    if (v >= lo && v <= hi) {
-      if (k < start) start = k;
-      if (k + 1 > end) end = k + 1;
-    }
+  const n = axis.length;
+  if (n === 0) return [0, 0];
+
+  // A single-element axis has no direction to infer; test it directly.
+  const ascending = n === 1 ? true : axis[n - 1] >= axis[0];
+
+  // `firstAtLeast`/`firstAbove` bracket the in-range span in coordinate order;
+  // for a descending axis the same coordinate bounds map to mirrored indices.
+  let start: number;
+  let end: number;
+  if (ascending) {
+    start = lowerBoundAsc(axis, lo); // first index with axis[i] >= lo
+    end = upperBoundAsc(axis, hi); // first index with axis[i] > hi
+  } else {
+    start = lowerBoundDesc(axis, hi); // first index with axis[i] <= hi
+    end = upperBoundDesc(axis, lo); // first index with axis[i] < lo
   }
   return start >= end ? [0, 0] : [start, end];
+}
+
+/** First index `i` in an ascending axis with `axis[i] >= target` (else `n`). */
+function lowerBoundAsc(axis: ArrayLike<number>, target: number): number {
+  let lo = 0;
+  let hi = axis.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (axis[mid] < target) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** First index `i` in an ascending axis with `axis[i] > target` (else `n`). */
+function upperBoundAsc(axis: ArrayLike<number>, target: number): number {
+  let lo = 0;
+  let hi = axis.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (axis[mid] <= target) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** First index `i` in a descending axis with `axis[i] <= target` (else `n`). */
+function lowerBoundDesc(axis: ArrayLike<number>, target: number): number {
+  let lo = 0;
+  let hi = axis.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (axis[mid] > target) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** First index `i` in a descending axis with `axis[i] < target` (else `n`). */
+function upperBoundDesc(axis: ArrayLike<number>, target: number): number {
+  let lo = 0;
+  let hi = axis.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (axis[mid] >= target) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
 }
 
 function make1dResolver(
@@ -437,26 +495,32 @@ function computeStride(
   maxCells: number | undefined,
 ): number {
   if (maxCells === undefined || rows * cols <= maxCells) return 1;
-  let s = 1;
   const fits = (k: number): boolean =>
     Math.ceil(rows / k) * Math.ceil(cols / k) <= maxCells;
-  // rows*cols > maxCells >= 1, so some finite stride fits.
-  while (!fits(s)) s++;
-  return s;
+  // `fits` is monotone in the stride (larger stride ⇒ fewer cells), so binary
+  // search the smallest stride that fits. A stride of max(rows, cols) collapses
+  // each axis to a single sample (1 cell <= maxCells >= 1), so the range is
+  // guaranteed to contain a fitting value.
+  let lo = 1;
+  let hi = Math.max(rows, cols);
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (fits(mid)) hi = mid;
+    else lo = mid + 1;
+  }
+  return lo;
 }
 
-interface ResolvedSelection extends PolygonSelection {
-  resolver: LayoutResolver;
-}
-
-function resolveSelection(opts: PolygonReadOptions): ResolvedSelection {
-  const resolver = resolveLayout(opts.spatialLayout);
+function resolveSelection(
+  opts: PolygonReadOptions,
+  resolver: LayoutResolver,
+): PolygonSelection {
   const bbox = resolver.bbox(opts.polygon);
   const rows = bbox.rMax - bbox.rMin;
   const cols = bbox.cMax - bbox.cMin;
 
   if (rows <= 0 || cols <= 0) {
-    return { cells: [], bbox, stride: 1, resolver };
+    return { cells: [], bbox, stride: 1 };
   }
 
   // Stride-then-mask (D5): decimate the bbox grid, then apply the ray-cast
@@ -467,7 +531,7 @@ function resolveSelection(opts: PolygonReadOptions): ResolvedSelection {
     stride--;
     cells = gatherCells(resolver, bbox, opts.polygon, stride);
   }
-  return { cells, bbox, stride, resolver };
+  return { cells, bbox, stride };
 }
 
 /** Row-major mask gather over the (strided) bbox grid. */
@@ -519,8 +583,11 @@ export function resolvePolygonCells(
 ): PolygonSelection {
   const timeAxis = opts.timeAxis ?? 0;
   validatePolygonReadInput(opts, arr.shape[timeAxis]);
-  const { cells, bbox, stride, resolver } = resolveSelection(opts);
+  // Reject a rank/layout mismatch before the (potentially expensive) bbox scan
+  // and mask gather.
+  const resolver = resolveLayout(opts.spatialLayout);
   assertArrayRank(arr, resolver);
+  const { cells, bbox, stride } = resolveSelection(opts, resolver);
   return { cells, bbox, stride };
 }
 
@@ -556,8 +623,11 @@ export async function* readPolygon(
   const nTime = arr.shape[timeAxis];
   validatePolygonReadInput(opts, nTime);
 
-  const { cells, bbox, resolver } = resolveSelection(opts);
+  // Reject a rank/layout mismatch before the (potentially expensive) bbox scan
+  // and mask gather.
+  const resolver = resolveLayout(opts.spatialLayout);
   assertArrayRank(arr, resolver);
+  const { cells, bbox } = resolveSelection(opts, resolver);
   if (cells.length === 0) return;
 
   const [tStart, tEnd] = opts.timeRange ?? [0, nTime];

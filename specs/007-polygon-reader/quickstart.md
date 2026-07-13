@@ -71,7 +71,7 @@ const sel = resolvePolygonCells(arr, {
 ```ts
 import { MemoryCache } from "@i4sea/zarr-node";
 
-const cache = new MemoryCache(512 * 1024 * 1024);
+const cache = new MemoryCache({ maxBytes: 512 * 1024 * 1024 });
 let decodes = 0;
 
 for await (const step of readPolygon(arr, {
