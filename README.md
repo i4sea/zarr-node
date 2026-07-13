@@ -412,6 +412,45 @@ Pass an explicit `gridKey` to control the cache key, or `verifyGrid: true` to fo
 corner sample of the coordinates into it (+2 cheap reads) when the dataset attrs
 can't be trusted.
 
+### Polygon reads (readPolygon)
+
+`readPolygon` streams — one time step at a time — only the cells geometrically
+inside a lat/lon polygon of a `[time, ...spatial]` array. It reads each step as a
+bounding-box block, so each backing chunk is fetched/decompressed at most once
+(chunks typically span the full time axis and are reused across steps via a shared
+`MemoryCache`), and peak memory stays bounded to ~one time slice regardless of the
+time extent. Aggregation is the caller's concern — you get the raw in-polygon values.
+
+```typescript
+import { openGroup } from "@i4sea/zarr-node";
+import { GridIndex, readPolygon } from "@i4sea/zarr-node/spatial";
+
+const group = await openGroup(store);
+const arr = await group.getArray("t2m"); // [time, ny, nx]
+const grid = await GridIndex.fromGroup(group); // curvilinear lat/lon
+
+const polygon: Array<[number, number]> = [
+  [-23.0, -43.5], [-23.0, -43.0], [-22.5, -43.0], [-22.5, -43.5],
+];
+
+for await (const step of readPolygon(arr, {
+  polygon,
+  spatialLayout: { kind: "2d", grid },
+})) {
+  // step.values: Float64Array of only the in-polygon cells for step.t
+  console.log(step.t, step.values.length);
+}
+```
+
+`resolvePolygonCells(arr, opts)` returns the time-invariant selection
+(`cells` + `bbox` + `stride`) without reading values — `cells[k]` aligns with
+`step.values[k]`. Three coordinate layouts are supported:
+`{ kind: "1d", lat, lon }` (monotonic axes), `{ kind: "2d", grid }`
+(curvilinear `GridIndex`), and `{ kind: "npoints", lat, lon }` (unstructured
+points). Set `maxCells` to cap huge selections with a clamped uniform stride
+(reported as `selection.stride`; no default cap). A runnable example lives in
+[`examples/read-polygon.ts`](examples/read-polygon.ts).
+
 ## Requirements
 
 - Node.js >= 22
@@ -463,6 +502,7 @@ instead of accumulating forever (omit ⇒ no expiry).
 | Class | Description |
 | --- | --- |
 | `GridIndex` | Nearest (lat, lon) → (i, j) on a 2D grid, with optional Redis-backed grid cache (`@i4sea/zarr-node/spatial`) |
+| `readPolygon` / `resolvePolygonCells` | Stream / resolve the cells inside a lat/lon polygon of a `[time, ...spatial]` array (`@i4sea/zarr-node/spatial`) |
 
 ## Contributing
 
