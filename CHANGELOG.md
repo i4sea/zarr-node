@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] — 2026-07-14
+
 ### Fixed
 
 - **Polygon reader accepts `[time, 1, lat, lon]` singleton-depth arrays (issue #18).** `readPolygon` / `resolvePolygonCells` previously required the array rank to match the layout exactly (`2d`/`1d` ⇒ rank 3, `npoints` ⇒ rank 2), so hydrodynamic current fields (`current_vel`, `current_dir`) from hidro/Delft3D datasets — which carry a degenerate depth dim of size 1, shape `[time, 1, lat, lon]` — could not stream through the polygon reader at all and were dropped from area-aggregated reads. `assertArrayRank` now accepts `rank = expected + k` when the `k` "middle" dims (between the leading time axis and the trailing spatial dims) are **all size 1**, and the per-step read selects index `0` for each of them (collapsing the dim), so the block stays C-order `[rows, cols]` and results are identical to the equivalent rank-3 array. More than one singleton middle dim (`[time, 1, 1, lat, lon]`) works too. A **non**-singleton middle dim (a genuine multi-level axis, e.g. a depth profile) still throws `SliceError`, now with a message stating the size-1 rule — collapsing it would need an explicit level selection, which this reader does not offer. This mirrors the point-read path's existing rank-4 singleton handling; `npoints` (rank 2) and plain rank-3 behavior are unchanged.
