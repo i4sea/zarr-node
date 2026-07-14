@@ -1384,10 +1384,16 @@ describe("singleton middle dims (degenerate depth in hydro current fields)", () 
     expect(sel4.cells.length).toBeGreaterThan(0);
 
     const steps3 = await collect(
-      readPolygon(rank3.arr, { polygon: CONCAVE_POLY, spatialLayout: layout1d }),
+      readPolygon(rank3.arr, {
+        polygon: CONCAVE_POLY,
+        spatialLayout: layout1d,
+      }),
     );
     const steps4 = await collect(
-      readPolygon(rank4.arr, { polygon: CONCAVE_POLY, spatialLayout: layout1d }),
+      readPolygon(rank4.arr, {
+        polygon: CONCAVE_POLY,
+        spatialLayout: layout1d,
+      }),
     );
     expect(steps4.map((s) => s.t)).toEqual(steps3.map((s) => s.t));
     for (let s = 0; s < steps3.length; s++) {
