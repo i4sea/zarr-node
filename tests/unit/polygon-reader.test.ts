@@ -1312,10 +1312,11 @@ describe("array rank validation", () => {
     ).toThrow(SliceError);
   });
 
-  it("rejects a 4-D array for a 1d layout (before any yield)", async () => {
+  it("rejects a 4-D array with a non-singleton middle dim (states the singleton rule)", async () => {
     const lat1d = [0, 1, 2, 3, 4];
     const lon1d = [0, 1, 2, 3, 4];
-    // [time, level, rows, cols] — one axis too many for the 1d layout.
+    // [time, level=2, rows, cols] — a genuine multi-level axis, not a size-1
+    // dim we can silently collapse. Must throw, and say why.
     const { arr } = await makeArray({
       shape: [2, 2, 5, 5],
       chunks: [2, 2, 5, 5],
@@ -1328,7 +1329,7 @@ describe("array rank validation", () => {
           spatialLayout: { kind: "1d", lat: lat1d, lon: lon1d },
         }),
       ),
-    ).rejects.toThrow(SliceError);
+    ).rejects.toThrow(/size 1/);
   });
 
   it("rejects a 3-D array for an npoints layout (needs [time, npoints])", async () => {
@@ -1345,6 +1346,113 @@ describe("array rank validation", () => {
         spatialLayout: { kind: "npoints", lat: latPts, lon: lonPts },
       }),
     ).toThrow(SliceError);
+  });
+});
+
+// ── Singleton middle dims: hydro current fields shaped [time, 1, lat, lon] ───
+
+describe("singleton middle dims (degenerate depth in hydro current fields)", () => {
+  const lat1d = Array.from({ length: 5 }, (_, i) => i);
+  const lon1d = Array.from({ length: 5 }, (_, j) => j);
+  const layout1d = { kind: "1d" as const, lat: lat1d, lon: lon1d };
+
+  it("streams [time, 1, lat, lon] identically to the equivalent [time, lat, lon]", async () => {
+    // Same values at (t, r, c) regardless of the degenerate depth axis.
+    const rank3 = await makeArray({
+      shape: [3, 5, 5],
+      chunks: [3, 5, 5],
+      filler: (t, r, c) => t * 1000 + r * 10 + c,
+    });
+    const rank4 = await makeArray({
+      shape: [3, 1, 5, 5],
+      chunks: [3, 1, 5, 5],
+      filler: (t, _d, r, c) => t * 1000 + r * 10 + c,
+    });
+
+    const sel3 = resolvePolygonCells(rank3.arr, {
+      polygon: CONCAVE_POLY,
+      spatialLayout: layout1d,
+    });
+    const sel4 = resolvePolygonCells(rank4.arr, {
+      polygon: CONCAVE_POLY,
+      spatialLayout: layout1d,
+    });
+    // Selection (cells/bbox/stride) is time- and rank-invariant.
+    expect(cellKeys(sel4)).toBe(cellKeys(sel3));
+    expect(sel4.bbox).toEqual(sel3.bbox);
+    expect(sel4.stride).toBe(sel3.stride);
+    expect(sel4.cells.length).toBeGreaterThan(0);
+
+    const steps3 = await collect(
+      readPolygon(rank3.arr, { polygon: CONCAVE_POLY, spatialLayout: layout1d }),
+    );
+    const steps4 = await collect(
+      readPolygon(rank4.arr, { polygon: CONCAVE_POLY, spatialLayout: layout1d }),
+    );
+    expect(steps4.map((s) => s.t)).toEqual(steps3.map((s) => s.t));
+    for (let s = 0; s < steps3.length; s++) {
+      expect(Array.from(steps4[s].values)).toEqual(
+        Array.from(steps3[s].values),
+      );
+    }
+  });
+
+  it("handles a 2d layout with a leading singleton depth dim", async () => {
+    const { arr } = await makeArray({
+      shape: [2, 1, 5, 5],
+      chunks: [2, 1, 5, 5],
+      filler: (t, _d, r, c) => t * 100 + r * 10 + c,
+    });
+    const sel = resolvePolygonCells(arr, {
+      polygon: CONCAVE_POLY,
+      spatialLayout: { kind: "2d", grid: GRID_5x5 },
+    });
+    expect(sel.cells.length).toBeGreaterThan(0);
+    const steps = await collect(
+      readPolygon(arr, {
+        polygon: CONCAVE_POLY,
+        spatialLayout: { kind: "2d", grid: GRID_5x5 },
+      }),
+    );
+    expect(steps.map((s) => s.t)).toEqual([0, 1]);
+    for (const step of steps)
+      sel.cells.forEach((cell, k) =>
+        expect(step.values[k]).toBe(step.t * 100 + cell.i * 10 + cell.j),
+      );
+  });
+
+  it("collapses more than one singleton middle dim ([time, 1, 1, lat, lon])", async () => {
+    const { arr } = await makeArray({
+      shape: [2, 1, 1, 5, 5],
+      chunks: [2, 1, 1, 5, 5],
+      filler: (t, _d0, _d1, r, c) => t * 1000 + r * 10 + c,
+    });
+    const sel = resolvePolygonCells(arr, {
+      polygon: CONCAVE_POLY,
+      spatialLayout: layout1d,
+    });
+    expect(sel.cells.length).toBeGreaterThan(0);
+    const steps = await collect(
+      readPolygon(arr, { polygon: CONCAVE_POLY, spatialLayout: layout1d }),
+    );
+    for (const step of steps)
+      sel.cells.forEach((cell, k) =>
+        expect(step.values[k]).toBe(step.t * 1000 + cell.i * 10 + cell.j),
+      );
+  });
+
+  it("still rejects a non-singleton middle dim ([time, 3, lat, lon])", async () => {
+    const { arr } = await makeArray({
+      shape: [2, 3, 5, 5],
+      chunks: [2, 3, 5, 5],
+      filler: () => 1,
+    });
+    expect(() =>
+      resolvePolygonCells(arr, {
+        polygon: CONCAVE_POLY,
+        spatialLayout: layout1d,
+      }),
+    ).toThrow(/size 1/);
   });
 });
 
