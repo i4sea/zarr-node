@@ -214,19 +214,54 @@ function assertNumericCoords(a: ArrayLike<number>, name: string): void {
 }
 
 /**
- * Reject an array whose rank does not match the layout's expected axis count
- * (`[time, rows, cols]` for 1d/2d; `[time, npoints]` for npoints). Without this
- * check a mismatched array produces chunk keys of the wrong arity, every chunk
- * misses, and the read silently returns all-fill values instead of erroring.
+ * Validate the array rank against the layout and return the number of
+ * "singleton middle dims" to collapse — extra axes sitting between the leading
+ * time axis and the trailing spatial dims, each of which must have size 1.
+ *
+ * A layout addresses `resolver.ndim` axes (`[time, rows, cols]` for 1d/2d;
+ * `[time, npoints]` for npoints). Hydrodynamic current fields from
+ * hidro/Delft3D datasets carry a degenerate depth dim of size 1 — shape
+ * `[time, 1, lat, lon]` — so we accept `rank = ndim + k` when the `k` middle
+ * dims are all size 1, and select index 0 for each of them (dropping the dim).
+ * A middle dim larger than 1 (a genuine multi-level axis, e.g. a depth
+ * profile) still throws: collapsing it would need an explicit level selection,
+ * which this reader does not offer.
+ *
+ * The base rank check remains load-bearing: without it a mismatched array
+ * produces chunk keys of the wrong arity, every chunk misses, and the read
+ * silently returns all-fill values instead of erroring.
+ *
+ * @returns The count `k` of leading singleton middle dims (0 for an
+ *   exact-rank array). {@link readPolygon} injects `k` index-0 selections
+ *   after the time axis so the block read stays C-order over `[rows, cols]`.
  */
-function assertArrayRank(arr: ZarrArray, resolver: LayoutResolver): void {
-  if (arr.shape.length !== resolver.ndim) {
+function assertArrayRank(arr: ZarrArray, resolver: LayoutResolver): number {
+  const rank = arr.shape.length;
+  const k = rank - resolver.ndim;
+  if (k < 0) {
     throw new SliceError(
-      `polygon reader: array rank ${arr.shape.length} does not match the ` +
+      `polygon reader: array rank ${rank} does not match the ` +
         `spatialLayout, which expects a ${resolver.ndim}-D array ` +
         `([time, ...spatial]); got shape ${JSON.stringify(arr.shape)}`,
     );
   }
+  if (k > 0) {
+    // Middle dims sit between the leading time axis and the trailing spatial
+    // dims: shape[1 .. 1+k). Each must be a degenerate size-1 axis we can drop
+    // by selecting index 0.
+    const middle = arr.shape.slice(1, 1 + k);
+    if (middle.some((d) => d !== 1)) {
+      throw new SliceError(
+        `polygon reader: array rank ${rank} exceeds the ${resolver.ndim}-D ` +
+          `spatialLayout ([time, ...spatial]), and the extra middle dims ` +
+          `${JSON.stringify(middle)} are not all size 1; only degenerate ` +
+          `size-1 dims between the time axis and the trailing spatial dims ` +
+          `can be collapsed (a multi-level axis needs an explicit selection). ` +
+          `Got shape ${JSON.stringify(arr.shape)}`,
+      );
+    }
+  }
+  return k;
 }
 
 /** Bounding box in polygon (lat/lon) space. */
@@ -568,14 +603,16 @@ function gatherCells(
  * exceeded (FR-012/FR-013). The `cells` order here is identical to the
  * `values` alignment of every {@link PolygonTimestep} (FR-004).
  *
- * @param arr Array shaped `[time, ...spatial]`.
+ * @param arr Array shaped `[time, ...spatial]`. Degenerate size-1 dims between
+ *   the time axis and the trailing spatial dims are allowed (e.g. a depth dim
+ *   of size 1 in `[time, 1, lat, lon]`) and collapsed by index-0 selection.
  * @param opts Polygon, layout, and read options.
  * @returns The time-invariant selection; `cells: []` for a polygon that selects
  *   nothing (e.g. entirely outside the grid) — not an error (FR-017).
  * @throws {SliceError} on invalid input: non-finite polygon vertex, < 3 distinct
  *   vertices, reversed/out-of-range `timeRange`, non-integer/`< 1` `maxCells`,
- *   array rank not matching the layout, unsupported layout, or BigInt coords
- *   (FR-018).
+ *   array rank below the layout's or exceeding it with a non-singleton middle
+ *   dim, unsupported layout, or BigInt coords (FR-018).
  */
 export function resolvePolygonCells(
   arr: ZarrArray,
@@ -589,6 +626,22 @@ export function resolvePolygonCells(
   assertArrayRank(arr, resolver);
   const { cells, bbox, stride } = resolveSelection(opts, resolver);
   return { cells, bbox, stride };
+}
+
+/**
+ * Inject an index-0 selection for each of the `k` degenerate size-1 middle
+ * dims, immediately after the leading time index. Selecting a single index
+ * collapses the dim to one element, so the block read stays C-order over
+ * `[rows, cols]` and the mask gather (`values[localR * rowStride + localC]`)
+ * is unaffected. `k === 0` leaves the selection untouched.
+ */
+function withSingletonMiddleDims(
+  selection: (number | [number, number])[],
+  k: number,
+): (number | [number, number])[] {
+  if (k === 0) return selection;
+  selection.splice(1, 0, ...new Array<number>(k).fill(0));
+  return selection;
 }
 
 /**
@@ -610,7 +663,10 @@ export function resolvePolygonCells(
  * the generator completes. All other `readOptions` (concurrency,
  * maxInFlightBytes, observability, ...) are forwarded (FR-016).
  *
- * @param arr Array shaped `[time, ...spatial]`.
+ * @param arr Array shaped `[time, ...spatial]`. Degenerate size-1 dims between
+ *   the time axis and the trailing spatial dims (e.g. `[time, 1, lat, lon]`)
+ *   are collapsed by index-0 selection, streaming identically to the
+ *   equivalent rank-3 array.
  * @param opts Polygon, layout, `timeRange`, `maxCells`, and read options.
  * @throws {SliceError} on invalid input (see {@link resolvePolygonCells}).
  *   Completes with zero yields for an empty selection (FR-017).
@@ -626,7 +682,10 @@ export async function* readPolygon(
   // Reject a rank/layout mismatch before the (potentially expensive) bbox scan
   // and mask gather.
   const resolver = resolveLayout(opts.spatialLayout);
-  assertArrayRank(arr, resolver);
+  // `singletonMiddleDims` (k) counts degenerate size-1 axes between time and
+  // the trailing spatial dims (e.g. depth in `[time, 1, lat, lon]`); each is
+  // collapsed by selecting index 0 in the per-step read below.
+  const singletonMiddleDims = assertArrayRank(arr, resolver);
   const { cells, bbox } = resolveSelection(opts, resolver);
   if (cells.length === 0) return;
 
@@ -644,7 +703,10 @@ export async function* readPolygon(
 
   const rowStride = bbox.cMax - bbox.cMin;
   for (let t = tStart; t < tEnd; t++) {
-    const selection = resolver.spatialSelect(timeAxis, t, bbox);
+    const selection = withSingletonMiddleDims(
+      resolver.spatialSelect(timeAxis, t, bbox),
+      singletonMiddleDims,
+    );
     const block = await arr.get(selection, readOptions);
     const values = new Float64Array(cells.length);
     for (let k = 0; k < cells.length; k++) {
