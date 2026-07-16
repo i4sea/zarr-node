@@ -836,7 +836,9 @@ function resolveSelection(
       ? resolver.cellBounds
       : undefined;
   const coverBBox = footprint ? resolver.coverBBox : undefined;
-  const bbox = coverBBox ? coverBBox(opts.polygon) : resolver.bbox(opts.polygon);
+  const bbox = coverBBox
+    ? coverBBox(opts.polygon)
+    : resolver.bbox(opts.polygon);
 
   const rows = bbox.rMax - bbox.rMin;
   const cols = bbox.cMax - bbox.cMin;
