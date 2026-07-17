@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-07-17
+
+### Added
+
+- **Polygon reader `selection: "cover"` for thin / concave areas.** `readPolygon` / `resolvePolygonCells` gain an opt-in `PolygonReadOptions.selection: "center" | "cover"` (default `"center"`, existing behavior unchanged). The default `"center"` keeps a grid cell when its center falls inside the ring, so a thin or sinuous corridor narrower than a cell selects very few cells — or none, collapsing to the single-cell centroid fallback, which for a concave ring can resolve to a point *outside* the drawn shape. `"cover"` is a conservative rasterization: alongside the center test it keeps any cell whose **footprint** overlaps the polygon (corner-in-ring, ring-vertex-in-cell, or edge-crossing via segment intersection), guaranteeing a non-empty selection whenever the polygon overlaps any cell — the membership that makes an area "distribution over the zone" reduction robust for any shape. Cell footprints come from neighbour midpoints (mirrored at the grid edge), and a `coverBBox` scan box keyed off footprints (a superset of the center-bbox) resolves the sub-cell case — a small polygon that contains no cell center at all. Implemented for the `1d`-rectilinear and `2d`-curvilinear layouts; the `npoints` (unstructured) layout has no footprint and degrades to `"center"`. Validated against a real 2-D curvilinear WRF grid (762×603): a thin concave corridor selected 12 cells under `"center"` and 41 under `"cover"`, filling out the min/max band.
+
 ## [0.9.2] — 2026-07-14
 
 ### Fixed
