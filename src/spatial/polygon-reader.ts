@@ -42,6 +42,17 @@ export interface PolygonReadOptions {
   timeRange?: [number, number];
   /** Cell budget; exceeding it applies a clamped spatial stride. Default: none. */
   maxCells?: number;
+  /**
+   * Cell membership rule. `"center"` (default, back-compat) keeps a cell iff
+   * its center is inside the ring. `"cover"` additionally keeps any cell whose
+   * FOOTPRINT overlaps the polygon (conservative rasterization), so a thin or
+   * concave area narrower than the grid step still selects the cells it visibly
+   * covers on the map instead of collapsing to a near-empty (or empty) set —
+   * the right membership for an area "distribution over the zone" reduction.
+   * Implemented for the rectilinear 1d and curvilinear 2d layouts; npoints
+   * falls back to `"center"`.
+   */
+  selection?: "center" | "cover";
   /** Forwarded to ZarrArray.get (memoryCache, concurrency, maxInFlightBytes, observability, ...). */
   readOptions?: ReadOptions;
 }
@@ -116,6 +127,89 @@ export function pointInPolygon(
     }
   }
   return inside;
+}
+
+/**
+ * Orientation-based segment intersection in (lat, lon) space (lat=y, lon=x).
+ * Returns true when segment `a1a2` and segment `b1b2` cross or touch. Colinear
+ * overlap is treated as intersecting. Used by {@link polygonOverlapsRect} for
+ * the "cover" membership test.
+ *
+ * @internal
+ */
+export function segmentsIntersect(
+  a1: readonly [number, number],
+  a2: readonly [number, number],
+  b1: readonly [number, number],
+  b2: readonly [number, number],
+): boolean {
+  const cross = (
+    o: readonly [number, number],
+    p: readonly [number, number],
+    q: readonly [number, number],
+  ): number => (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0]);
+  const onSeg = (
+    o: readonly [number, number],
+    p: readonly [number, number],
+    q: readonly [number, number],
+  ): boolean =>
+    Math.min(o[0], q[0]) <= p[0] &&
+    p[0] <= Math.max(o[0], q[0]) &&
+    Math.min(o[1], q[1]) <= p[1] &&
+    p[1] <= Math.max(o[1], q[1]);
+  const d1 = cross(b1, b2, a1);
+  const d2 = cross(b1, b2, a2);
+  const d3 = cross(a1, a2, b1);
+  const d4 = cross(a1, a2, b2);
+  if (d1 > 0 !== d2 > 0 && d3 > 0 !== d4 > 0) return true;
+  // Colinear / touching cases.
+  if (d1 === 0 && onSeg(b1, a1, b2)) return true;
+  if (d2 === 0 && onSeg(b1, a2, b2)) return true;
+  if (d3 === 0 && onSeg(a1, b1, a2)) return true;
+  if (d4 === 0 && onSeg(a1, b2, a2)) return true;
+  return false;
+}
+
+/**
+ * Does the (filled) polygon `ring` overlap the axis-aligned lat/lon rectangle
+ * `[latLo,latHi] x [lonLo,lonHi]`? True when any rect corner is inside the ring
+ * (rect inside, or straddling), any ring vertex is inside the rect (ring inside,
+ * or straddling), or any ring edge crosses a rect edge (a thin ribbon slicing
+ * through the cell without landing a vertex or corner). This is the conservative
+ * rasterization predicate behind `selection: "cover"`.
+ *
+ * @internal
+ */
+export function polygonOverlapsRect(
+  ring: ReadonlyArray<readonly [number, number]>,
+  latLo: number,
+  latHi: number,
+  lonLo: number,
+  lonHi: number,
+): boolean {
+  const corners: Array<[number, number]> = [
+    [latLo, lonLo],
+    [latLo, lonHi],
+    [latHi, lonHi],
+    [latHi, lonLo],
+  ];
+  for (const [la, lo] of corners) {
+    if (pointInPolygon(la, lo, ring)) return true;
+  }
+  for (const [la, lo] of ring) {
+    if (la >= latLo && la <= latHi && lo >= lonLo && lo <= lonHi) return true;
+  }
+  const n = ring.length;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    for (let e = 0; e < 4; e++) {
+      if (
+        segmentsIntersect(ring[j], ring[i], corners[e], corners[(e + 1) % 4])
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /** Count of distinct vertices in a ring (order-preserving; closure-tolerant). */
@@ -303,6 +397,26 @@ interface LayoutResolver {
   lonAt(i: number, j: number): number;
   /** Bounding box (half-open, index space) fully containing the polygon. */
   bbox(ring: Array<[number, number]>): PolygonBBox;
+  /**
+   * Bounding box for `"cover"` membership: every cell whose FOOTPRINT overlaps
+   * the polygon's lat/lon envelope (a superset of {@link bbox}, which keys off
+   * cell centers). Needed for a sub-cell area that contains no center — its
+   * center-bbox is empty, but its footprint-bbox is not. Defined for the
+   * rectilinear 1d and curvilinear 2d layouts; `"cover"` degrades to `"center"`
+   * when absent (e.g. npoints).
+   */
+  coverBBox?(ring: Array<[number, number]>): PolygonBBox;
+  /**
+   * Footprint of cell `(i, j)` in lat/lon space: the axis-aligned rectangle
+   * spanning the midpoints to its neighbours (one-sided step at the grid edge).
+   * The `"cover"` selection tests this rectangle against the polygon. Defined
+   * for the rectilinear 1d and curvilinear 2d layouts; when absent, `"cover"`
+   * degrades to `"center"`.
+   */
+  cellBounds?(
+    i: number,
+    j: number,
+  ): { latLo: number; latHi: number; lonLo: number; lonHi: number };
   /** Build the `arr.get` selection for one time step over the given bbox block. */
   spatialSelect(
     timeAxis: number,
@@ -363,12 +477,102 @@ function make2dResolver(grid: GridIndex): LayoutResolver {
       const [c0, c1] = clampRange(cMin, cMax + 1, grid.nx);
       return { rMin: r0, rMax: r1, cMin: c0, cMax: c1 };
     },
+    coverBBox(ring) {
+      // Same full-grid scan as bbox(), but keep cells whose FOOTPRINT overlaps
+      // the polygon envelope (a superset of the center-in-envelope box), so a
+      // sub-cell / between-centers area still yields a non-empty scan box.
+      const env = polygonEnvelope(ring);
+      let rMin = Infinity;
+      let rMax = -Infinity;
+      let cMin = Infinity;
+      let cMax = -Infinity;
+      for (let i = 0; i < grid.ny; i++) {
+        for (let j = 0; j < grid.nx; j++) {
+          const b = cellBounds2d(grid, i, j);
+          if (
+            b.latHi >= env.latMin &&
+            b.latLo <= env.latMax &&
+            b.lonHi >= env.lonMin &&
+            b.lonLo <= env.lonMax
+          ) {
+            if (i < rMin) rMin = i;
+            if (i > rMax) rMax = i;
+            if (j < cMin) cMin = j;
+            if (j > cMax) cMax = j;
+          }
+        }
+      }
+      if (rMin > rMax || cMin > cMax) {
+        return { rMin: 0, rMax: 0, cMin: 0, cMax: 0 };
+      }
+      const [r0, r1] = clampRange(rMin, rMax + 1, grid.ny);
+      const [c0, c1] = clampRange(cMin, cMax + 1, grid.nx);
+      return { rMin: r0, rMax: r1, cMin: c0, cMax: c1 };
+    },
+    cellBounds(i, j) {
+      return cellBounds2d(grid, i, j);
+    },
     spatialSelect(timeAxis, t, bbox) {
       // v1: time axis leads; two trailing spatial axes.
       void timeAxis;
       return [t, [bbox.rMin, bbox.rMax], [bbox.cMin, bbox.cMax]];
     },
   };
+}
+
+/**
+ * Axis-aligned lat/lon footprint of a curvilinear cell `(i, j)`: the rectangle
+ * spanning the midpoints to its four edge-neighbours (center ± half the step to
+ * each). At a grid edge the missing side is mirrored from the opposite one, so
+ * a boundary cell keeps a full footprint instead of collapsing to its center
+ * (matching the 1-D `axisCellSpan` behaviour). The result is a conservative
+ * superset for a slightly skewed/rotated grid — enough for `"cover"` membership
+ * without an exact quad-cell intersection (area weighting is a later refinement).
+ */
+function cellBounds2d(
+  grid: GridIndex,
+  i: number,
+  j: number,
+): { latLo: number; latHi: number; lonLo: number; lonHi: number } {
+  const lat0 = grid.latAt(i, j);
+  const lon0 = grid.lonAt(i, j);
+
+  // Half-offset (dlat, dlon) from the center toward a neighbour, or null when
+  // that neighbour is off-grid.
+  const half = (ii: number, jj: number): [number, number] | null =>
+    ii < 0 || ii >= grid.ny || jj < 0 || jj >= grid.nx
+      ? null
+      : [(grid.latAt(ii, jj) - lat0) / 2, (grid.lonAt(ii, jj) - lon0) / 2];
+
+  // Opposite pairs; mirror one side when the other is off-grid.
+  const pair = (
+    a: [number, number] | null,
+    b: [number, number] | null,
+  ): Array<[number, number]> => {
+    if (a && b) return [a, b];
+    if (a) return [a, [-a[0], -a[1]]];
+    if (b) return [[-b[0], -b[1]], b];
+    return [];
+  };
+
+  const offsets = [
+    ...pair(half(i - 1, j), half(i + 1, j)),
+    ...pair(half(i, j - 1), half(i, j + 1)),
+  ];
+
+  let latLo = lat0;
+  let latHi = lat0;
+  let lonLo = lon0;
+  let lonHi = lon0;
+  for (const [dLat, dLon] of offsets) {
+    const la = lat0 + dLat;
+    const lo = lon0 + dLon;
+    if (la < latLo) latLo = la;
+    if (la > latHi) latHi = la;
+    if (lo < lonLo) lonLo = lo;
+    if (lo > lonHi) lonHi = lo;
+  }
+  return { latLo, latHi, lonLo, lonHi };
 }
 
 /**
@@ -468,11 +672,83 @@ function make1dResolver(
       const [cMin, cMax] = axisRange(lon, env.lonMin, env.lonMax);
       return { rMin, rMax, cMin, cMax };
     },
+    coverBBox(ring) {
+      const env = polygonEnvelope(ring);
+      const [rMin, rMax] = axisFootprintRange(lat, env.latMin, env.latMax);
+      const [cMin, cMax] = axisFootprintRange(lon, env.lonMin, env.lonMax);
+      return { rMin, rMax, cMin, cMax };
+    },
+    cellBounds(i, j) {
+      return {
+        ...halfOpenBounds(lat, i),
+        ...halfOpenBoundsLon(lon, j),
+      };
+    },
     spatialSelect(timeAxis, t, bbox) {
       void timeAxis;
       return [t, [bbox.rMin, bbox.rMax], [bbox.cMin, bbox.cMax]];
     },
   };
+}
+
+/**
+ * Half-open cell footprint on a 1-D axis: the interval spanning the midpoints
+ * to index `i`'s neighbours, mirroring the one-sided step at either end. Works
+ * for ascending or descending axes (the caller orders lo/hi). A single-element
+ * axis has no step, so the footprint collapses to the point (lo === hi).
+ */
+function axisCellSpan(axis: ArrayLike<number>, i: number): [number, number] {
+  const v = axis[i];
+  const n = axis.length;
+  const lo =
+    i > 0 ? (v + axis[i - 1]) / 2 : n > 1 ? v - (axis[1] - axis[0]) / 2 : v;
+  const hi =
+    i < n - 1
+      ? (v + axis[i + 1]) / 2
+      : n > 1
+        ? v + (axis[n - 1] - axis[n - 2]) / 2
+        : v;
+  return [Math.min(lo, hi), Math.max(lo, hi)];
+}
+
+function halfOpenBounds(
+  lat: ArrayLike<number>,
+  i: number,
+): { latLo: number; latHi: number } {
+  const [latLo, latHi] = axisCellSpan(lat, i);
+  return { latLo, latHi };
+}
+
+function halfOpenBoundsLon(
+  lon: ArrayLike<number>,
+  j: number,
+): { lonLo: number; lonHi: number } {
+  const [lonLo, lonHi] = axisCellSpan(lon, j);
+  return { lonLo, lonHi };
+}
+
+/**
+ * Half-open `[first, last+1)` index range of the cells on a 1-D axis whose
+ * FOOTPRINT overlaps `[lo, hi]` — the cover-mode analogue of {@link axisRange}
+ * (which keys off centers). The footprints tile the axis contiguously, so the
+ * overlapping indices form one run; a single O(n) scan finds it (axes are
+ * short). Empty range ⇒ `[0, 0]`.
+ */
+function axisFootprintRange(
+  axis: ArrayLike<number>,
+  lo: number,
+  hi: number,
+): [number, number] {
+  let first = -1;
+  let last = -1;
+  for (let i = 0; i < axis.length; i++) {
+    const [flo, fhi] = axisCellSpan(axis, i);
+    if (fhi >= lo && flo <= hi) {
+      if (first < 0) first = i;
+      last = i;
+    }
+  }
+  return first < 0 ? [0, 0] : [first, last + 1];
 }
 
 function makeNpointsResolver(
@@ -550,7 +826,20 @@ function resolveSelection(
   opts: PolygonReadOptions,
   resolver: LayoutResolver,
 ): PolygonSelection {
-  const bbox = resolver.bbox(opts.polygon);
+  // "cover" only applies where the resolver can produce cell footprints
+  // (rectilinear 1d and curvilinear 2d define them; npoints does not, so it
+  // degrades to "center"). `coverBBox` keys off footprints (a superset of the
+  // center-bbox), so a sub-cell area that contains no center still has a
+  // non-empty scan box.
+  const footprint =
+    opts.selection === "cover" && typeof resolver.cellBounds === "function"
+      ? resolver.cellBounds
+      : undefined;
+  const coverBBox = footprint ? resolver.coverBBox : undefined;
+  const bbox = coverBBox
+    ? coverBBox(opts.polygon)
+    : resolver.bbox(opts.polygon);
+
   const rows = bbox.rMax - bbox.rMin;
   const cols = bbox.cMax - bbox.cMin;
 
@@ -558,30 +847,42 @@ function resolveSelection(
     return { cells: [], bbox, stride: 1 };
   }
 
-  // Stride-then-mask (D5): decimate the bbox grid, then apply the ray-cast
-  // mask; clamp the stride down until at least one in-polygon cell survives.
+  // Stride-then-mask (D5): decimate the bbox grid, then apply the membership
+  // test; clamp the stride down until at least one cell survives.
   let stride = computeStride(rows, cols, opts.maxCells);
-  let cells = gatherCells(resolver, bbox, opts.polygon, stride);
+  let cells = gatherCells(resolver, bbox, opts.polygon, stride, footprint);
   while (cells.length === 0 && stride > 1) {
     stride--;
-    cells = gatherCells(resolver, bbox, opts.polygon, stride);
+    cells = gatherCells(resolver, bbox, opts.polygon, stride, footprint);
   }
   return { cells, bbox, stride };
 }
 
-/** Row-major mask gather over the (strided) bbox grid. */
+/**
+ * Row-major mask gather over the (strided) bbox grid. A cell is kept when its
+ * center is inside the ring (`"center"` membership); when `cellBounds` is
+ * supplied (`"cover"` membership) it is also kept if its footprint overlaps the
+ * polygon (conservative rasterization), so thin/concave areas keep the cells
+ * they visibly cover. `cellBounds` is `undefined` for `"center"`.
+ */
 function gatherCells(
   resolver: LayoutResolver,
   bbox: PolygonBBox,
   ring: Array<[number, number]>,
   stride: number,
+  cellBounds: LayoutResolver["cellBounds"],
 ): PolygonCell[] {
   const cells: PolygonCell[] = [];
   for (let i = bbox.rMin; i < bbox.rMax; i += stride) {
     for (let j = bbox.cMin; j < bbox.cMax; j += stride) {
       const lat = resolver.latAt(i, j);
       const lon = resolver.lonAt(i, j);
-      if (pointInPolygon(lat, lon, ring)) {
+      let keep = pointInPolygon(lat, lon, ring);
+      if (!keep && cellBounds) {
+        const b = cellBounds(i, j);
+        keep = polygonOverlapsRect(ring, b.latLo, b.latHi, b.lonLo, b.lonHi);
+      }
+      if (keep) {
         cells.push({ i, j, lat, lon });
       }
     }
@@ -597,7 +898,10 @@ function gatherCells(
  *
  * The returned `cells` are the grid cells whose lat/lon fall inside the ring
  * (ray-cast, concave-correct — FR-002), ordered row-major over the bounding box
- * (clarification Q1). `bbox` is the half-open index-space block that fully
+ * (clarification Q1). With `opts.selection === "cover"` (rectilinear 1d and
+ * curvilinear 2d layouts) the set also includes cells whose footprint overlaps
+ * the ring, so a thin/concave area keeps the cells it visibly covers rather
+ * than collapsing to a near-empty selection. `bbox` is the half-open index-space block that fully
  * contains them (the extent {@link readPolygon} reads per time step). `stride`
  * is the applied uniform sub-sampling factor — `1` unless `opts.maxCells` was
  * exceeded (FR-012/FR-013). The `cells` order here is identical to the
