@@ -62,12 +62,20 @@ export interface PolygonReadOptions {
    * instead of re-scanning per variable.
    *
    * MUST have been produced by {@link resolvePolygonCells} for the SAME `arr`
-   * shape/rank and the SAME `polygon`, `spatialLayout`, `timeRange`,
-   * `selection`, and `maxCells` — the reader trusts it verbatim and does not
-   * re-derive the bbox, so a mismatched selection yields wrong values. `polygon`
-   * and `spatialLayout` are still required (the per-step block read uses the
-   * layout resolver); `maxCells` is ignored when this is set (the stride is
-   * already baked into the supplied selection).
+   * shape/rank and the SAME `polygon` and `spatialLayout` — the reader trusts
+   * the `cells` + `bbox` verbatim and does not re-derive them, so a selection
+   * from a differently-shaped array yields wrong values. As a guard against the
+   * most common misuse, the reader bounds-checks the supplied `bbox`/`cells`
+   * against this array's spatial extents and throws {@link SliceError} on a
+   * shape mismatch rather than slicing out of range into silent fill/NaN.
+   *
+   * `spatialLayout` is still required (the per-step block read maps the `bbox`
+   * through the layout resolver). `polygon` is also still required, but only to
+   * pass {@link validatePolygonReadInput}; it does NOT feed the read once this
+   * is set. `timeRange` is applied fresh per read and need not match the one
+   * used to resolve. `maxCells` has no effect on the read (the stride is already
+   * baked into the supplied selection), but if present it must still be a valid
+   * positive integer or validation rejects it.
    */
   resolvedSelection?: PolygonSelection;
   /** Forwarded to ZarrArray.get (memoryCache, concurrency, maxInFlightBytes, observability, ...). */
@@ -373,6 +381,47 @@ function assertArrayRank(arr: ZarrArray, resolver: LayoutResolver): number {
     }
   }
   return k;
+}
+
+/**
+ * Guard a caller-supplied {@link PolygonReadOptions.resolvedSelection} before
+ * the reader trusts it verbatim. `resolvedSelection` bypasses the internal
+ * membership scan, so nothing else checks that its `bbox`/`cells` actually fit
+ * `arr` — a selection resolved against a different-shaped array would otherwise
+ * slice out of range and silently yield fill/NaN values (arr.get pads the
+ * out-of-range region) instead of erroring. We validate against the resolver's
+ * declared spatial extents (`nRows`/`nCols`) so the failure is a clean
+ * {@link SliceError} at the trust boundary.
+ */
+function assertSelectionInBounds(
+  sel: PolygonSelection,
+  resolver: LayoutResolver,
+): void {
+  const { rMin, rMax, cMin, cMax } = sel.bbox;
+  if (
+    rMin < 0 ||
+    cMin < 0 ||
+    rMax > resolver.nRows ||
+    cMax > resolver.nCols ||
+    rMax < rMin ||
+    cMax < cMin
+  ) {
+    throw new SliceError(
+      `polygon reader: resolvedSelection.bbox ` +
+        `[${rMin}, ${rMax})x[${cMin}, ${cMax}) is out of range for the ` +
+        `${resolver.nRows}x${resolver.nCols} spatial grid; the selection must ` +
+        `have been produced by resolvePolygonCells for this array's shape`,
+    );
+  }
+  for (const cell of sel.cells) {
+    if (cell.i < rMin || cell.i >= rMax || cell.j < cMin || cell.j >= cMax) {
+      throw new SliceError(
+        `polygon reader: resolvedSelection cell (${cell.i}, ${cell.j}) falls ` +
+          `outside its own bbox [${rMin}, ${rMax})x[${cMin}, ${cMax}); the ` +
+          `selection must have been produced by resolvePolygonCells`,
+      );
+    }
+  }
 }
 
 /** Bounding box in polygon (lat/lon) space. */
@@ -1011,8 +1060,15 @@ export async function* readPolygon(
   const singletonMiddleDims = assertArrayRank(arr, resolver);
   // Reuse a caller-supplied selection (resolved ONCE for many same-shape
   // variables) instead of re-scanning the bbox per read; see
-  // `PolygonReadOptions.resolvedSelection`. Absent it, resolve as before.
-  const { cells, bbox } = opts.resolvedSelection ?? resolveSelection(opts, resolver);
+  // `PolygonReadOptions.resolvedSelection`. Absent it, resolve as before. A
+  // supplied selection is trusted verbatim but bounds-checked against this
+  // array's spatial extents first, so a mismatched shape errors cleanly rather
+  // than slicing out of range into silent fill/NaN values.
+  if (opts.resolvedSelection) {
+    assertSelectionInBounds(opts.resolvedSelection, resolver);
+  }
+  const { cells, bbox } =
+    opts.resolvedSelection ?? resolveSelection(opts, resolver);
   if (cells.length === 0) return;
 
   const [tStart, tEnd] = opts.timeRange ?? [0, nTime];
