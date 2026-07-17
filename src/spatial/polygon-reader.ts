@@ -53,6 +53,23 @@ export interface PolygonReadOptions {
    * falls back to `"center"`.
    */
   selection?: "center" | "cover";
+  /**
+   * Pre-resolved selection to reuse instead of scanning again. When supplied,
+   * {@link readPolygon} skips its internal `resolveSelection` (the O(bbox)
+   * membership scan) and streams straight from these `cells` + `bbox`. Intended
+   * for a caller that reads MANY same-shape variables through one polygon: run
+   * {@link resolvePolygonCells} ONCE and thread the result into every read
+   * instead of re-scanning per variable.
+   *
+   * MUST have been produced by {@link resolvePolygonCells} for the SAME `arr`
+   * shape/rank and the SAME `polygon`, `spatialLayout`, `timeRange`,
+   * `selection`, and `maxCells` — the reader trusts it verbatim and does not
+   * re-derive the bbox, so a mismatched selection yields wrong values. `polygon`
+   * and `spatialLayout` are still required (the per-step block read uses the
+   * layout resolver); `maxCells` is ignored when this is set (the stride is
+   * already baked into the supplied selection).
+   */
+  resolvedSelection?: PolygonSelection;
   /** Forwarded to ZarrArray.get (memoryCache, concurrency, maxInFlightBytes, observability, ...). */
   readOptions?: ReadOptions;
 }
@@ -953,7 +970,9 @@ function withSingletonMiddleDims(
  * yielding only the in-polygon cell values for that step (FR-001).
  *
  * The selection is resolved once up front (same as {@link resolvePolygonCells})
- * and each step is read as a single bounding-box block via {@link ZarrArray.get}.
+ * -- or, when `opts.resolvedSelection` is supplied, reused verbatim so a caller
+ * reading many same-shape variables through one polygon scans the bbox only once
+ * -- and each step is read as a single bounding-box block via {@link ZarrArray.get}.
  * A single {@link MemoryCache} is shared across all per-step reads, so a backing
  * chunk that spans the full time axis is fetched/decompressed at most once and
  * reused for every later step (FR-005) — and because only one time slice is
@@ -990,7 +1009,10 @@ export async function* readPolygon(
   // the trailing spatial dims (e.g. depth in `[time, 1, lat, lon]`); each is
   // collapsed by selecting index 0 in the per-step read below.
   const singletonMiddleDims = assertArrayRank(arr, resolver);
-  const { cells, bbox } = resolveSelection(opts, resolver);
+  // Reuse a caller-supplied selection (resolved ONCE for many same-shape
+  // variables) instead of re-scanning the bbox per read; see
+  // `PolygonReadOptions.resolvedSelection`. Absent it, resolve as before.
+  const { cells, bbox } = opts.resolvedSelection ?? resolveSelection(opts, resolver);
   if (cells.length === 0) return;
 
   const [tStart, tEnd] = opts.timeRange ?? [0, nTime];
