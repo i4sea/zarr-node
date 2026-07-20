@@ -736,6 +736,34 @@ describe("readPolygon with a pre-resolved selection", () => {
     ).rejects.toBeInstanceOf(SliceError);
   });
 
+  it("throws when the selection fits the spatialLayout but not the array's shape", async () => {
+    // The subtle misuse: the caller passes a `spatialLayout` (5×5 grid) that
+    // MATCHES the pre-resolved selection, but reuses it against a 4×4 array.
+    // Because the guard would derive its extents from the grid, a layout-based
+    // check would pass and arr.get would silently pad the out-of-range row/col
+    // with fill values. The guard must key off `arr`'s actual trailing spatial
+    // dims, so this is rejected before any read.
+    const { arr } = await makeArray({
+      shape: [2, 4, 4],
+      chunks: [2, 4, 4],
+      filler: (t, r, c) => t * 100 + r * 10 + c,
+    });
+    const sel: PolygonSelection = {
+      cells: [{ i: 4, j: 4, lat: 4, lon: 4 }],
+      bbox: { rMin: 0, rMax: 5, cMin: 0, cMax: 5 }, // fits GRID_5x5, not the 4×4 arr
+      stride: 1,
+    };
+    await expect(
+      collect(
+        readPolygon(arr, {
+          polygon: CONCAVE_POLY,
+          spatialLayout: { kind: "2d", grid: GRID_5x5 },
+          resolvedSelection: sel,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(SliceError);
+  });
+
   it("throws on a cell that falls outside its own bbox", async () => {
     const { arr } = await makeArray({
       shape: [2, 5, 5],

@@ -389,27 +389,45 @@ function assertArrayRank(arr: ZarrArray, resolver: LayoutResolver): number {
  * membership scan, so nothing else checks that its `bbox`/`cells` actually fit
  * `arr` — a selection resolved against a different-shaped array would otherwise
  * slice out of range and silently yield fill/NaN values (arr.get pads the
- * out-of-range region) instead of erroring. We validate against the resolver's
- * declared spatial extents (`nRows`/`nCols`) so the failure is a clean
+ * out-of-range region) instead of erroring.
+ *
+ * We validate against `arr`'s ACTUAL trailing spatial extents — not the
+ * resolver's declared `nRows`/`nCols`. The resolver's extents come from
+ * `spatialLayout` (the GridIndex / lat-lon coords), so checking against them
+ * would pass whenever the caller supplies a matching `spatialLayout`, even if
+ * `arr` itself has a different-shaped spatial grid — precisely the misuse this
+ * guard exists to catch. The trailing spatial dims sit after the leading time
+ * axis and the `k` collapsed singleton middle dims: for a 3-D `[time, rows,
+ * cols]` layout they are the last two axes; for 2-D `[time, npoints]` the point
+ * axis maps to rows (cols is a synthetic single column). A mismatch is a clean
  * {@link SliceError} at the trust boundary.
  */
 function assertSelectionInBounds(
   sel: PolygonSelection,
   resolver: LayoutResolver,
+  arr: ZarrArray,
 ): void {
   const { rMin, rMax, cMin, cMax } = sel.bbox;
+  // Trailing spatial axes of `arr`, past the time axis and any collapsed
+  // singleton middle dims. `resolver.ndim` is 3 for row/col layouts (last two
+  // axes are the grid) and 2 for npoints (single trailing point axis; the
+  // resolver models cols as a size-1 synthetic column).
+  const rank = arr.shape.length;
+  const arrRows =
+    resolver.ndim === 3 ? arr.shape[rank - 2] : arr.shape[rank - 1];
+  const arrCols = resolver.ndim === 3 ? arr.shape[rank - 1] : resolver.nCols;
   if (
     rMin < 0 ||
     cMin < 0 ||
-    rMax > resolver.nRows ||
-    cMax > resolver.nCols ||
+    rMax > arrRows ||
+    cMax > arrCols ||
     rMax < rMin ||
     cMax < cMin
   ) {
     throw new SliceError(
       `polygon reader: resolvedSelection.bbox ` +
         `[${rMin}, ${rMax})x[${cMin}, ${cMax}) is out of range for the ` +
-        `${resolver.nRows}x${resolver.nCols} spatial grid; the selection must ` +
+        `${arrRows}x${arrCols} spatial grid; the selection must ` +
         `have been produced by resolvePolygonCells for this array's shape`,
     );
   }
@@ -1065,7 +1083,7 @@ export async function* readPolygon(
   // array's spatial extents first, so a mismatched shape errors cleanly rather
   // than slicing out of range into silent fill/NaN values.
   if (opts.resolvedSelection) {
-    assertSelectionInBounds(opts.resolvedSelection, resolver);
+    assertSelectionInBounds(opts.resolvedSelection, resolver, arr);
   }
   const { cells, bbox } =
     opts.resolvedSelection ?? resolveSelection(opts, resolver);
