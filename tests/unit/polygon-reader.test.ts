@@ -620,6 +620,175 @@ describe("readPolygon streaming (2-D supplied grid)", () => {
   });
 });
 
+// ── resolvedSelection: reuse a pre-resolved selection across reads ───────────
+
+describe("readPolygon with a pre-resolved selection", () => {
+  it("streams byte-identically whether the selection is resolved inline or reused", async () => {
+    const { arr } = await makeArray({
+      shape: [3, 5, 5],
+      chunks: [3, 5, 5],
+      filler: (t, r, c) => t * 100 + r * 10 + c,
+    });
+    const opts = {
+      polygon: CONCAVE_POLY,
+      spatialLayout: { kind: "2d" as const, grid: GRID_5x5 },
+    };
+    // Resolve once, then feed that selection back into the read.
+    const sel = resolvePolygonCells(arr, opts);
+    const inline = await collect(readPolygon(arr, opts));
+    const reused = await collect(
+      readPolygon(arr, { ...opts, resolvedSelection: sel }),
+    );
+
+    expect(reused.map((s) => s.t)).toEqual(inline.map((s) => s.t));
+    reused.forEach((step, k) => {
+      expect(Array.from(step.values)).toEqual(Array.from(inline[k].values));
+    });
+  });
+
+  it("trusts the supplied selection verbatim without re-scanning the bbox", async () => {
+    const { arr } = await makeArray({
+      shape: [2, 5, 5],
+      chunks: [2, 5, 5],
+      filler: (t, r, c) => t * 100 + r * 10 + c,
+    });
+    const opts = {
+      polygon: CONCAVE_POLY,
+      spatialLayout: { kind: "2d" as const, grid: GRID_5x5 },
+    };
+    // A hand-picked selection that a fresh scan would NEVER produce: two cells,
+    // in a non-row-major order, one of them (4,4) OUTSIDE the concave polygon.
+    // The reader can only emit exactly these — in this order — if it skipped its
+    // own membership scan and streamed straight from `resolvedSelection`.
+    const forced: PolygonSelection = {
+      cells: [
+        { i: 4, j: 4, lat: 4, lon: 4 },
+        { i: 0, j: 0, lat: 0, lon: 0 },
+      ],
+      bbox: { rMin: 0, rMax: 5, cMin: 0, cMax: 5 },
+      stride: 1,
+    };
+    const steps = await collect(
+      readPolygon(arr, { ...opts, resolvedSelection: forced }),
+    );
+
+    expect(steps.map((s) => s.t)).toEqual([0, 1]);
+    for (const step of steps) {
+      expect(step.values.length).toBe(2);
+      // value = t*100 + i*10 + j, aligned to the FORCED cell order.
+      expect(step.values[0]).toBe(step.t * 100 + 44); // (4,4) first
+      expect(step.values[1]).toBe(step.t * 100 + 0); //  (0,0) second
+    }
+    // Sanity: (4,4) is genuinely outside the concave polygon, so an inline scan
+    // would have dropped it — the forced selection really is un-scannable.
+    expect(pointInPolygon(4, 4, CONCAVE_POLY)).toBe(false);
+  });
+
+  it("yields nothing for a supplied empty selection", async () => {
+    const { arr } = await makeArray({
+      shape: [3, 5, 5],
+      chunks: [3, 5, 5],
+      filler: () => 1,
+    });
+    const steps = await collect(
+      readPolygon(arr, {
+        polygon: CONCAVE_POLY,
+        spatialLayout: { kind: "2d", grid: GRID_5x5 },
+        resolvedSelection: {
+          cells: [],
+          bbox: { rMin: 0, rMax: 0, cMin: 0, cMax: 0 },
+          stride: 1,
+        },
+      }),
+    );
+    expect(steps).toEqual([]);
+  });
+
+  it("throws on a bbox that exceeds the array's spatial extents", async () => {
+    // A selection resolved against a 5×5 grid, reused against a 4×4 array — the
+    // exact same-shape misuse the contract warns about. Without the guard,
+    // arr.get would pad the out-of-range column with fill values and the read
+    // would return NaN silently; the guard must turn that into a clean error.
+    const { arr } = await makeArray({
+      shape: [2, 4, 4],
+      chunks: [2, 4, 4],
+      filler: (t, r, c) => t * 100 + r * 10 + c,
+    });
+    const grid4 = makeGrid(
+      4,
+      4,
+      (i) => i,
+      (j) => j,
+    );
+    const oversized: PolygonSelection = {
+      cells: [{ i: 0, j: 0, lat: 0, lon: 0 }],
+      bbox: { rMin: 0, rMax: 5, cMin: 0, cMax: 5 }, // 5 > nCols/nRows === 4
+      stride: 1,
+    };
+    await expect(
+      collect(
+        readPolygon(arr, {
+          polygon: CONCAVE_POLY,
+          spatialLayout: { kind: "2d", grid: grid4 },
+          resolvedSelection: oversized,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(SliceError);
+  });
+
+  it("throws when the selection fits the spatialLayout but not the array's shape", async () => {
+    // The subtle misuse: the caller passes a `spatialLayout` (5×5 grid) that
+    // MATCHES the pre-resolved selection, but reuses it against a 4×4 array.
+    // Because the guard would derive its extents from the grid, a layout-based
+    // check would pass and arr.get would silently pad the out-of-range row/col
+    // with fill values. The guard must key off `arr`'s actual trailing spatial
+    // dims, so this is rejected before any read.
+    const { arr } = await makeArray({
+      shape: [2, 4, 4],
+      chunks: [2, 4, 4],
+      filler: (t, r, c) => t * 100 + r * 10 + c,
+    });
+    const sel: PolygonSelection = {
+      cells: [{ i: 4, j: 4, lat: 4, lon: 4 }],
+      bbox: { rMin: 0, rMax: 5, cMin: 0, cMax: 5 }, // fits GRID_5x5, not the 4×4 arr
+      stride: 1,
+    };
+    await expect(
+      collect(
+        readPolygon(arr, {
+          polygon: CONCAVE_POLY,
+          spatialLayout: { kind: "2d", grid: GRID_5x5 },
+          resolvedSelection: sel,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(SliceError);
+  });
+
+  it("throws on a cell that falls outside its own bbox", async () => {
+    const { arr } = await makeArray({
+      shape: [2, 5, 5],
+      chunks: [2, 5, 5],
+      filler: (t, r, c) => t * 100 + r * 10 + c,
+    });
+    const stray: PolygonSelection = {
+      // (9, 0) lies outside the supplied bbox (rMax === 5) — reading it would
+      // index past the block and emit NaN. The guard rejects it before any read.
+      cells: [{ i: 9, j: 0, lat: 9, lon: 0 }],
+      bbox: { rMin: 0, rMax: 5, cMin: 0, cMax: 5 },
+      stride: 1,
+    };
+    await expect(
+      collect(
+        readPolygon(arr, {
+          polygon: CONCAVE_POLY,
+          spatialLayout: { kind: "2d", grid: GRID_5x5 },
+          resolvedSelection: stray,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(SliceError);
+  });
+});
+
 // ── US2: chunk-read-once + memory bounding ───────────────────────────────────
 
 // 6×6 grid, lat=i, lon=j; a polygon spanning multiple 3×3 spatial tiles.
