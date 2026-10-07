@@ -237,9 +237,11 @@ export class S3Store implements Store {
       return await executeWithRetry(
         async () => {
           const sdk = await loadS3SDK();
+          // One deadline per attempt, covering both the request and the body.
+          const signal = AbortSignal.timeout(this.timeout);
           const response = await client.send(
             new sdk.GetObjectCommand(commandInput),
-            { abortSignal: AbortSignal.timeout(this.timeout) },
+            { abortSignal: signal },
           );
           const body = response.Body;
           if (!body) {
@@ -249,7 +251,7 @@ export class S3Store implements Store {
               `${describeOp} succeeded but returned no body`,
             );
           }
-          const bytes = await body.transformToByteArray();
+          const bytes = await readBody(body, signal);
           if (this.hooks?.onStoreFetch) {
             safeInvoke(this.hooks.onStoreFetch, {
               key,
@@ -339,6 +341,36 @@ export class S3Store implements Store {
       );
       return undefined;
     }
+  }
+}
+
+/**
+ * Read a GetObject body, bounded by the attempt's abort signal. The SDK's
+ * abort destroys the socket, but when the object carries a checksum the body
+ * is wrapped in the SDK's validating stream, which never settles if that
+ * happens mid-body (#22). Racing the signal here makes the deadline hold
+ * while keeping checksum validation on; the timeout's `TimeoutError` is
+ * retryable, so the next attempt runs.
+ */
+async function readBody(
+  body: { transformToByteArray(): Promise<Uint8Array>; destroy?: () => void },
+  signal: AbortSignal,
+): Promise<Uint8Array> {
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => {
+      // No error argument: destroy(err) would emit 'error' on a stream that
+      // may have no listener left.
+      body.destroy?.();
+      reject(signal.reason);
+    };
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([body.transformToByteArray(), aborted]);
+  } finally {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
   }
 }
 

@@ -61,7 +61,11 @@ export interface S3StoreOptions {
   endpoint?: string;
   /** Max retries after the initial attempt for transient failures. Default 3. */
   maxRetries?: number;
-  /** Per-operation timeout in milliseconds (aborts `client.send`). Default 30000. */
+  /**
+   * Per-attempt timeout in milliseconds, covering the request and the body
+   * read (a GET whose body stalls mid-download is aborted and retried).
+   * Default 30000.
+   */
   timeout?: number;
   /**
    * Max concurrent TCP connections in the HTTP keep-alive pool. Default 128.
