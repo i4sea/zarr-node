@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`S3Store` GET no longer hangs forever when the body stalls mid-download (issue #22).** For objects that carry a full-object checksum (e.g. `x-amz-checksum-crc32`), the AWS SDK's default `responseChecksumValidation: "WHEN_SUPPORTED"` wraps the `GetObject` body in a validating stream that swallows the abort: when the per-attempt `AbortSignal.timeout` destroyed the socket mid-body, `transformToByteArray()` never settled, no retry ran, and the read stayed pending until the caller gave up. Because the promise never settled, it also pinned the `CachedStore` in-flight dedup entry and blocked `clearCache()`, so an evicted dataset's teardown — and any re-`open()` of that id, `clear()` and `whenTornDown()` — hung until restart. The body read is now raced against the same per-attempt deadline as the request, so `timeout` bounds request **and** body regardless of how the SDK wraps the stream; a stalled attempt rejects with a retryable `TimeoutError` and goes through the normal retry policy. SDK checksum validation stays on (it costs ~2 ms per 5 MB chunk with Node's native `zlib.crc32`) and still rejects corrupt bodies.
+
 ## [0.10.0] — 2026-07-17
 
 ### Added

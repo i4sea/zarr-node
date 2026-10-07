@@ -8,6 +8,7 @@ import {
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
 import { S3Store } from "../../src/store/s3.js";
+import { StoreError } from "../../src/errors.js";
 import { openArray } from "../../src/index.js";
 
 const FIXTURES = join(import.meta.dirname, "..", "fixtures");
@@ -192,6 +193,7 @@ describe("S3Store — retry and timeout (local fake S3)", () => {
   let transientCounter = 0;
   let always500Counter = 0;
   let notFoundCounter = 0;
+  let stallOnceCounter = 0;
   const savedEnv: Record<string, string | undefined> = {};
 
   beforeAll(async () => {
@@ -249,6 +251,27 @@ describe("S3Store — retry and timeout (local fake S3)", () => {
           return;
         }
 
+        if (
+          urlPath.includes("stall-crc-key") ||
+          (urlPath.includes("stall-once-key") && stallOnceCounter++ === 0)
+        ) {
+          // Headers (with a full-object CRC32, like real S3 objects) plus 1 KB
+          // of a 1 MB body, then stall — the TCP stream stops mid-body (#22).
+          res.writeHead(200, {
+            "Content-Type": "application/octet-stream",
+            "Content-Length": "1000000",
+            "x-amz-checksum-crc32": "AAAAAA==",
+          });
+          res.write(Buffer.alloc(1000));
+          return;
+        }
+
+        if (urlPath.includes("stall-once-key")) {
+          res.writeHead(200, { "Content-Type": "application/octet-stream" });
+          res.end(Buffer.from([4, 5, 6]));
+          return;
+        }
+
         if (urlPath.includes("hang-key")) {
           // Never respond — exercises the per-operation timeout abort
           return;
@@ -270,6 +293,8 @@ describe("S3Store — retry and timeout (local fake S3)", () => {
   });
 
   afterAll(() => {
+    // Stalled responses keep their sockets open; drop them so close() returns.
+    fakeS3?.closeAllConnections();
     fakeS3?.close();
     if (savedEnv.AWS_ACCESS_KEY_ID === undefined) {
       delete process.env.AWS_ACCESS_KEY_ID;
@@ -337,6 +362,29 @@ describe("S3Store — retry and timeout (local fake S3)", () => {
     await expect(store.get("hang-key")).rejects.toThrow();
     expect(performance.now() - started).toBeLessThan(5000);
   });
+
+  it("aborts a body that stalls mid-download on a checksummed object (#22)", async () => {
+    const store = makeStore({ timeout: 300, maxRetries: 0 });
+    const started = performance.now();
+    await expect(store.get("stall-crc-key")).rejects.toThrow(StoreError);
+    expect(performance.now() - started).toBeLessThan(5000);
+  }, 10_000);
+
+  it("retries a stalled body and returns the next attempt's data (#22)", async () => {
+    stallOnceCounter = 0;
+    const events: { attempt: number }[] = [];
+    const store = new S3Store({
+      bucket: "test-bucket",
+      region: "us-east-1",
+      endpoint: fakeEndpoint,
+      timeout: 300,
+      observability: { onRetry: (e) => events.push(e) },
+    });
+    const data = await store.get("stall-once-key");
+    expect(data).toEqual(new Uint8Array([4, 5, 6]));
+    expect(stallOnceCounter).toBe(2);
+    expect(events).toHaveLength(1);
+  }, 10_000);
 
   it("fires onRetry per attempt", async () => {
     transientCounter = 0;
